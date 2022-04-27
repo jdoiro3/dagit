@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"io/ioutil"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -24,30 +24,6 @@ type Object struct {
 	location string
 	name     string
 	content  []byte
-}
-
-type TreeEntry struct {
-	mode string
-	name string
-	hash string
-}
-
-type Commit struct {
-	tree    string
-	parents []string
-}
-
-func getObjectsData(s string, d fs.DirEntry, err error) error {
-	if err != nil {
-		return err
-	}
-	is_hex, err := regexp.MatchString("^[a-fA-F0-9]+$", filepath.Base(s))
-	if !d.IsDir() && is_hex {
-		println(s)
-		var obj *Object = newObject(s)
-		fmt.Printf("{type: \"%s\", size: \"%s\", content: %s}\n", obj.obj_type, obj.size, obj.toJson())
-	}
-	return nil
 }
 
 // Given a byte find the first byte in a data slice that equals the match_byte, returning the index.
@@ -72,6 +48,100 @@ func getSize(first_space_index int, data *[]byte) (string, int) {
 	first_nul_index := findFirstMatch(NUL, first_space_index+1, data)
 	obj_size := string((*data)[first_space_index:first_nul_index])
 	return strings.TrimSpace(obj_size), first_nul_index + 1
+}
+
+func getHead() {
+
+}
+
+func newObject(object_path string) *Object {
+	zlib_bytes, err := ioutil.ReadFile(object_path)
+	if err != nil {
+		panic(err)
+	}
+	// zlib expects an io.Reader object
+	reader, err := zlib.NewReader(bytes.NewReader(zlib_bytes))
+	if err != nil {
+		panic(err)
+	}
+	bytes, err := ioutil.ReadAll(reader)
+	if err != nil {
+		panic(err)
+	}
+	data_ptr := &bytes
+	obj_type, first_space_index := getType(data_ptr)
+	size, content_start_index := getSize(first_space_index, data_ptr)
+	object_dir := filepath.Base(filepath.Dir(object_path))
+	return &Object{obj_type, size, object_path, object_dir + filepath.Base(object_path), bytes[content_start_index:]}
+}
+
+func (obj *Object) toJson() string {
+	switch obj.obj_type {
+	case "tree":
+		entries := parseTree(obj)
+		output := "[\n"
+		for i, entry := range entries {
+			if i == len(entries)-1 {
+				output += entry.toJson() + "\n"
+			} else {
+				output += entry.toJson() + ",\n"
+			}
+		}
+		return output + "]\n"
+	case "commit":
+		commit := parseCommit(obj)
+		parents, _ := json.Marshal(commit.parents)
+		return fmt.Sprintf("{ \"parents\": %s, \"tree\": \"%s\"}", string(parents), commit.tree)
+	case "blob":
+		return "\"\""
+	default:
+		return fmt.Sprintf("I'm a %s\n", obj.obj_type)
+	}
+}
+
+type TreeEntry struct {
+	mode string
+	name string
+	hash string
+}
+
+func (e *TreeEntry) toJson() string {
+	return fmt.Sprintf("{\"mode\": \"%s\", \"name\": \"%s\", \"hash\": \"%s\"}", e.mode, e.name, e.hash)
+}
+
+type Commit struct {
+	tree    string
+	parents []string
+}
+
+type Repo struct {
+	location string
+}
+
+func getObjectName(object_path string) string {
+	object_dir := filepath.Base(filepath.Dir(object_path))
+	name := object_dir + filepath.Base(object_path)
+	return name
+}
+
+func (r *Repo) getObject(name string) *Object {
+	var obj *Object
+	filepath.WalkDir(r.location+"/.git/objects", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		is_hex, err := regexp.MatchString("^[a-fA-F0-9]+$", filepath.Base(path))
+		if !d.IsDir() && is_hex && getObjectName(path) == name {
+			obj = newObject(path)
+			//fmt.Printf("\"%s\": {\"type\": \"%s\", \"size\": \"%s\", \"content\": %s},\n", obj.name, obj.obj_type, obj.size, obj.toJson())
+		}
+		return nil
+	})
+	return obj
+}
+
+func newRepo(location string) *Repo {
+	return &Repo{location}
 }
 
 func parseTree(obj *Object) []TreeEntry {
@@ -121,49 +191,8 @@ func parseCommit(obj *Object) Commit {
 	return Commit{tree_hash, parents}
 }
 
-func newObject(object_path string) *Object {
-	zlib_bytes, err := ioutil.ReadFile(object_path)
-	if err != nil {
-		panic(err)
-	}
-	// zlib expects an io.Reader object
-	reader, err := zlib.NewReader(bytes.NewReader(zlib_bytes))
-	if err != nil {
-		panic(err)
-	}
-	bytes, err := ioutil.ReadAll(reader)
-	if err != nil {
-		panic(err)
-	}
-	data_ptr := &bytes
-	obj_type, first_space_index := getType(data_ptr)
-	size, content_start_index := getSize(first_space_index, data_ptr)
-	return &Object{obj_type, size, object_path, filepath.Base(object_path), bytes[content_start_index:]}
-}
-
-func (obj *Object) toJson() string {
-	switch obj.obj_type {
-	case "tree":
-		entries := parseTree(obj)
-		output := "[\n"
-		for i, entry := range entries {
-			if i == len(entries)-1 {
-				output += fmt.Sprintf("{mode: \"%s\", name: \"%s\", hash: \"%s\"}\n", entry.mode, entry.name, entry.hash)
-			} else {
-				output += fmt.Sprintf("{mode: \"%s\", name: \"%s\", hash: \"%s\"},\n", entry.mode, entry.name, entry.hash)
-			}
-		}
-		return output + "]\n"
-	case "commit":
-		commit := parseCommit(obj)
-		return fmt.Sprintf("{ parents: %s, tree: \"%s\"}", commit.parents, commit.tree)
-	case "blob":
-		return "I'm a blob"
-	default:
-		return fmt.Sprintf("I'm a %s\n", obj.obj_type)
-	}
-}
-
 func main() {
-	filepath.WalkDir(os.Args[1], getObjectsData)
+	repo := newRepo("/Users/joebob/Desktop/mkdocs-multirepo-plugin")
+	obj := repo.getObject("1091c15ba4616576ca28fc71dd1532f540500fae")
+	fmt.Println(obj.toJson())
 }
