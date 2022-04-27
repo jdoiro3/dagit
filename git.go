@@ -116,6 +116,7 @@ type Commit struct {
 
 type Repo struct {
 	location string
+	objects  map[string]*Object
 }
 
 func getObjectName(object_path string) string {
@@ -124,24 +125,31 @@ func getObjectName(object_path string) string {
 	return name
 }
 
-func (r *Repo) getObject(name string) *Object {
-	var obj *Object
-	filepath.WalkDir(r.location+"/.git/objects", func(path string, d fs.DirEntry, err error) error {
+func getObjects(objects_dir string) map[string]*Object {
+	var objects map[string]*Object
+	objects = make(map[string]*Object)
+	filepath.WalkDir(objects_dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		is_hex, err := regexp.MatchString("^[a-fA-F0-9]+$", filepath.Base(path))
-		if !d.IsDir() && is_hex && getObjectName(path) == name {
-			obj = newObject(path)
+		if !d.IsDir() && is_hex {
+			obj := newObject(path)
+			objects[obj.name] = obj
 			//fmt.Printf("\"%s\": {\"type\": \"%s\", \"size\": \"%s\", \"content\": %s},\n", obj.name, obj.obj_type, obj.size, obj.toJson())
 		}
 		return nil
 	})
-	return obj
+	return objects
 }
 
 func newRepo(location string) *Repo {
-	return &Repo{location}
+	objects := getObjects(location + "/.git/objects")
+	return &Repo{location, objects}
+}
+
+func (r *Repo) getObject(name string) *Object {
+	return r.objects[name]
 }
 
 func parseTree(obj *Object) []TreeEntry {
