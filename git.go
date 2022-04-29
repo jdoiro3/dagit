@@ -26,15 +26,20 @@ type Object struct {
 	content  []byte
 }
 
-// Given a byte find the first byte in a data slice that equals the match_byte, returning the index.
-// If no match is found, returns -1
-func findFirstMatch(match_byte byte, start_index int, data *[]byte) int {
-	for i, this_byte := range (*data)[start_index:] {
-		if this_byte == match_byte {
-			return start_index + i
-		}
-	}
-	return -1
+type TreeEntry struct {
+	mode string
+	name string
+	hash string
+}
+
+type Commit struct {
+	tree    string
+	parents []string
+}
+
+type Repo struct {
+	location string
+	objects  map[string]*Object
 }
 
 func getType(data *[]byte) (string, int) {
@@ -48,10 +53,6 @@ func getSize(first_space_index int, data *[]byte) (string, int) {
 	first_nul_index := findFirstMatch(NUL, first_space_index+1, data)
 	obj_size := string((*data)[first_space_index:first_nul_index])
 	return strings.TrimSpace(obj_size), first_nul_index + 1
-}
-
-func getHead() {
-
 }
 
 func newObject(object_path string) *Object {
@@ -93,30 +94,14 @@ func (obj *Object) toJson() string {
 		parents, _ := json.Marshal(commit.parents)
 		return fmt.Sprintf("{ \"parents\": %s, \"tree\": \"%s\"}", string(parents), commit.tree)
 	case "blob":
-		return "\"\""
+		return "\"" + string(obj.content) + "\""
 	default:
 		return fmt.Sprintf("I'm a %s\n", obj.obj_type)
 	}
 }
 
-type TreeEntry struct {
-	mode string
-	name string
-	hash string
-}
-
 func (e *TreeEntry) toJson() string {
 	return fmt.Sprintf("{\"mode\": \"%s\", \"name\": \"%s\", \"hash\": \"%s\"}", e.mode, e.name, e.hash)
-}
-
-type Commit struct {
-	tree    string
-	parents []string
-}
-
-type Repo struct {
-	location string
-	objects  map[string]*Object
 }
 
 func getObjectName(object_path string) string {
@@ -136,7 +121,6 @@ func getObjects(objects_dir string) map[string]*Object {
 		if !d.IsDir() && is_hex {
 			obj := newObject(path)
 			objects[obj.name] = obj
-			//fmt.Printf("\"%s\": {\"type\": \"%s\", \"size\": \"%s\", \"content\": %s},\n", obj.name, obj.obj_type, obj.size, obj.toJson())
 		}
 		return nil
 	})
@@ -150,6 +134,32 @@ func newRepo(location string) *Repo {
 
 func (r *Repo) getObject(name string) *Object {
 	return r.objects[name]
+}
+
+func (r *Repo) refresh() {
+	objects := getObjects(r.location)
+	r.objects = objects
+}
+
+func (r *Repo) head() string {
+	bytes, err := ioutil.ReadFile(r.location + "/.git/HEAD")
+	if err != nil {
+		panic(err)
+	}
+	return strings.TrimSpace(strings.Split(string(bytes), ":")[1])
+}
+
+func (r *Repo) branch() string {
+	head := r.head()
+	return filepath.Base(head)
+}
+
+func (r *Repo) current_commit() *Object {
+	bytes, err := ioutil.ReadFile(r.location + "/.git/" + r.head())
+	if err != nil {
+		panic(err)
+	}
+	return r.getObject(strings.TrimSpace(string(bytes)))
 }
 
 func parseTree(obj *Object) []TreeEntry {
@@ -201,6 +211,11 @@ func parseCommit(obj *Object) Commit {
 
 func main() {
 	repo := newRepo("/Users/joebob/Desktop/mkdocs-multirepo-plugin")
-	obj := repo.getObject("1091c15ba4616576ca28fc71dd1532f540500fae")
+	obj := repo.getObject("03b07c783a602e71e392006106e9c482e7f5bffd")
+	fmt.Println(obj.toJson())
+	//repo.refresh()
+	fmt.Println(repo.head())
+	fmt.Println(repo.branch())
+	obj = repo.current_commit()
 	fmt.Println(obj.toJson())
 }
