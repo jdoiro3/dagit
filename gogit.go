@@ -36,7 +36,7 @@ const (
 )
 
 type Object struct {
-	obj_type string `json:"type"`
+	type_    string `json:"type"`
 	size     string `json:"size"`
 	location string `json:"location"`
 	name     string `json:"name"`
@@ -61,8 +61,8 @@ type Repo struct {
 
 func getType(data *[]byte) (string, int) {
 	first_space_index := findFirstMatch(SPACE, 0, data)
-	obj_type := string((*data)[0:first_space_index])
-	return strings.TrimSpace(obj_type), first_space_index
+	type_ := string((*data)[0:first_space_index])
+	return strings.TrimSpace(type_), first_space_index
 }
 
 // second return value is the start of the object's content
@@ -87,14 +87,14 @@ func newObject(object_path string) *Object {
 		panic(err)
 	}
 	data_ptr := &bytes
-	obj_type, first_space_index := getType(data_ptr)
+	type_, first_space_index := getType(data_ptr)
 	size, content_start_index := getSize(first_space_index, data_ptr)
 	object_dir := filepath.Base(filepath.Dir(object_path))
-	return &Object{obj_type, size, object_path, object_dir + filepath.Base(object_path), bytes[content_start_index:]}
+	return &Object{type_, size, object_path, object_dir + filepath.Base(object_path), bytes[content_start_index:]}
 }
 
 func (obj *Object) toJson() string {
-	switch obj.obj_type {
+	switch obj.type_ {
 	case "tree":
 		entries := parseTree(obj)
 		output := "[\n"
@@ -109,16 +109,16 @@ func (obj *Object) toJson() string {
 	case "commit":
 		commit := parseCommit(obj)
 		parents, _ := json.Marshal(commit.parents)
-		return fmt.Sprintf("{ \"parents\": %s, \"tree\": \"%s\"}", string(parents), commit.tree)
+		return fmt.Sprintf(`{"parents\": %s, "tree": "%s"}`, string(parents), commit.tree)
 	case "blob":
 		return "\"" + strings.Replace(string(obj.content), `"`, `\"`, -1) + "\""
 	default:
-		return fmt.Sprintf("I'm a %s\n", obj.obj_type)
+		return fmt.Sprintf("I'm a %s\n", obj.type_)
 	}
 }
 
 func (e *TreeEntry) toJson() string {
-	return fmt.Sprintf("{\"mode\": \"%s\", \"name\": \"%s\", \"hash\": \"%s\"}", e.mode, e.name, e.hash)
+	return fmt.Sprintf(`{"mode": "%s", "name": "%s", "hash": "%s"}`, e.mode, e.name, e.hash)
 }
 
 func getObjectName(object_path string) string {
@@ -174,7 +174,7 @@ func (r *Repo) toSQLite(path string) {
 	defer stmt.Close()
 
 	for name, obj := range r.objects {
-		_, err = stmt.Exec(name, obj.obj_type, obj.toJson())
+		_, err = stmt.Exec(name, obj.type_, obj.toJson())
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -255,15 +255,39 @@ func parseCommit(obj *Object) Commit {
 }
 
 func main() {
+	var repo_path string
+	var db_path string
+
 	app := &cli.App{
-		Name: "gogit",
-		Action: func(cCtx *cli.Context) error {
-			args := cCtx.Args()
-			repo := newRepo(args.Get(0))
-			fmt.Println("Generating Git SQLite database...")
-			repo.toSQLite(args.Get(1))
-			fmt.Println("Done generating database.")
-			return nil
+		UseShortOptionHandling: true,
+		Commands: []*cli.Command{
+			{
+				Name:  "to-sqlite",
+				Usage: "dfsdf",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:        "repo-path",
+						Value:       ".",
+						Aliases:     []string{"r"},
+						Destination: &repo_path,
+						Usage:       "Pass multiple greetings",
+					},
+					&cli.StringFlag{
+						Name:        "db-path",
+						Value:       "git.sqlite",
+						Aliases:     []string{"d"},
+						Destination: &db_path,
+						Usage:       "Pass multiple greetings",
+					},
+				},
+				Action: func(cCtx *cli.Context) error {
+					repo := newRepo(repo_path)
+					fmt.Println("Generating Git SQLite database...")
+					repo.toSQLite(db_path)
+					fmt.Println("Done generating database.")
+					return nil
+				},
+			},
 		},
 	}
 
