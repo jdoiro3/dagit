@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/schollz/progressbar/v3"
 	"github.com/urfave/cli/v2"
 )
 
@@ -109,7 +110,7 @@ func (obj *Object) toJson() string {
 	case "commit":
 		commit := parseCommit(obj)
 		parents, _ := json.Marshal(commit.parents)
-		return fmt.Sprintf(`{"parents\": %s, "tree": "%s"}`, string(parents), commit.tree)
+		return fmt.Sprintf(`{"parents": %s, "tree": "%s"}`, string(parents), commit.tree)
 	case "blob":
 		return "\"" + strings.Replace(string(obj.content), `"`, `\"`, -1) + "\""
 	default:
@@ -153,6 +154,14 @@ func (r *Repo) getObject(name string) *Object {
 	return r.objects[name]
 }
 
+func exec(db *sql.DB, query string) sql.Result {
+	result, err := db.Exec(query)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return result
+}
+
 func (r *Repo) toSQLite(path string) {
 	os.Remove(path)
 
@@ -162,22 +171,52 @@ func (r *Repo) toSQLite(path string) {
 	}
 	defer db.Close()
 
-	_, err = db.Exec(`create table objects (name text, type text, object jsonb)`)
+	exec(db, `create table objects (name text primary key, type text, object jsonb);`)
+	exec(db, `create table edges (src text, dest text);`)
+	objs_stmt, err := db.Prepare("insert into objects(name, type, object) values(?, ?, ?)")
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	stmt, err := db.Prepare("insert into objects(name, type, object) values(?, ?, ?)")
+	edges_stmt, err := db.Prepare("insert into edges(src, dest) values(?, ?)")
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer stmt.Close()
+	defer objs_stmt.Close()
+	defer edges_stmt.Close()
 
+	fmt.Println("[info] generating Git SQLite database...")
+	bar := progressbar.Default(int64(len(r.objects)))
 	for name, obj := range r.objects {
-		_, err = stmt.Exec(name, obj.type_, obj.toJson())
+		_, err = objs_stmt.Exec(name, obj.type_, obj.toJson())
 		if err != nil {
 			log.Fatal(err)
 		}
+		switch obj.type_ {
+		case "commit":
+			commit := parseCommit(obj)
+			// commit edges to parents
+			for _, p := range commit.parents {
+				_, err = edges_stmt.Exec(obj.name, p)
+				if err != nil {
+					log.Fatal(err)
+				}
+			}
+			// commit edge to tree
+			_, err = edges_stmt.Exec(obj.name, commit.tree)
+			if err != nil {
+				log.Fatal(err)
+			}
+		case "tree":
+			entries := parseTree(obj)
+			// tree to blob edges
+			for _, entry := range entries {
+				_, err = edges_stmt.Exec(obj.name, entry.hash)
+				if err != nil {
+					log.Fatal(err)
+				}
+			}
+		}
+		bar.Add(1)
 	}
 }
 
@@ -282,9 +321,7 @@ func main() {
 				},
 				Action: func(cCtx *cli.Context) error {
 					repo := newRepo(repo_path)
-					fmt.Println("Generating Git SQLite database...")
 					repo.toSQLite(db_path)
-					fmt.Println("Done generating database.")
 					return nil
 				},
 			},
