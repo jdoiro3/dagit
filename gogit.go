@@ -3,15 +3,32 @@ package main
 import (
 	"bytes"
 	"compress/zlib"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
-	"io/ioutil"
+	"log"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	_ "github.com/mattn/go-sqlite3"
+	"github.com/urfave/cli/v2"
 )
+
+// Given a byte find the first byte in a data slice that equals the match_byte, returning the index.
+// If no match is found, returns -1
+func findFirstMatch(match_byte byte, start_index int, data *[]byte) int {
+	for i, this_byte := range (*data)[start_index:] {
+		if this_byte == match_byte {
+			return start_index + i
+		}
+	}
+	return -1
+}
 
 const (
 	SPACE byte = 32
@@ -19,11 +36,11 @@ const (
 )
 
 type Object struct {
-	obj_type string
-	size     string
-	location string
-	name     string
-	content  []byte
+	obj_type string `json:"type"`
+	size     string `json:"size"`
+	location string `json:"location"`
+	name     string `json:"name"`
+	content  []byte `json:"content"`
 }
 
 type TreeEntry struct {
@@ -56,7 +73,7 @@ func getSize(first_space_index int, data *[]byte) (string, int) {
 }
 
 func newObject(object_path string) *Object {
-	zlib_bytes, err := ioutil.ReadFile(object_path)
+	zlib_bytes, err := os.ReadFile(object_path)
 	if err != nil {
 		panic(err)
 	}
@@ -65,7 +82,7 @@ func newObject(object_path string) *Object {
 	if err != nil {
 		panic(err)
 	}
-	bytes, err := ioutil.ReadAll(reader)
+	bytes, err := io.ReadAll(reader)
 	if err != nil {
 		panic(err)
 	}
@@ -94,7 +111,7 @@ func (obj *Object) toJson() string {
 		parents, _ := json.Marshal(commit.parents)
 		return fmt.Sprintf("{ \"parents\": %s, \"tree\": \"%s\"}", string(parents), commit.tree)
 	case "blob":
-		return "\"" + string(obj.content) + "\""
+		return "\"" + strings.Replace(string(obj.content), `"`, `\"`, -1) + "\""
 	default:
 		return fmt.Sprintf("I'm a %s\n", obj.obj_type)
 	}
@@ -136,13 +153,41 @@ func (r *Repo) getObject(name string) *Object {
 	return r.objects[name]
 }
 
+func (r *Repo) toSQLite(path string) {
+	os.Remove(path)
+
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	_, err = db.Exec(`create table objects (name text, type text, object jsonb)`)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	stmt, err := db.Prepare("insert into objects(name, type, object) values(?, ?, ?)")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer stmt.Close()
+
+	for name, obj := range r.objects {
+		_, err = stmt.Exec(name, obj.obj_type, obj.toJson())
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+}
+
 func (r *Repo) refresh() {
 	objects := getObjects(r.location)
 	r.objects = objects
 }
 
 func (r *Repo) head() string {
-	bytes, err := ioutil.ReadFile(r.location + "/.git/HEAD")
+	bytes, err := os.ReadFile(r.location + "/.git/HEAD")
 	if err != nil {
 		panic(err)
 	}
@@ -155,7 +200,7 @@ func (r *Repo) branch() string {
 }
 
 func (r *Repo) current_commit() *Object {
-	bytes, err := ioutil.ReadFile(r.location + "/.git/" + r.head())
+	bytes, err := os.ReadFile(r.location + "/.git/" + r.head())
 	if err != nil {
 		panic(err)
 	}
@@ -210,12 +255,19 @@ func parseCommit(obj *Object) Commit {
 }
 
 func main() {
-	repo := newRepo("/Users/joebob/Desktop/mkdocs-multirepo-plugin")
-	obj := repo.getObject("03b07c783a602e71e392006106e9c482e7f5bffd")
-	fmt.Println(obj.toJson())
-	//repo.refresh()
-	fmt.Println(repo.head())
-	fmt.Println(repo.branch())
-	obj = repo.current_commit()
-	fmt.Println(obj.toJson())
+	app := &cli.App{
+		Name: "gogit",
+		Action: func(cCtx *cli.Context) error {
+			args := cCtx.Args()
+			repo := newRepo(args.Get(0))
+			fmt.Println("Generating Git SQLite database...")
+			repo.toSQLite(args.Get(1))
+			fmt.Println("Done generating database.")
+			return nil
+		},
+	}
+
+	if err := app.Run(os.Args); err != nil {
+		log.Fatal(err)
+	}
 }
