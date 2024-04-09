@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/schollz/progressbar/v3"
@@ -32,8 +33,11 @@ func findFirstMatch(match_byte byte, start_index int, data *[]byte) int {
 }
 
 const (
-	SPACE byte = 32
-	NUL   byte = 0
+	SPACE    byte   = 32
+	NUL      byte   = 0
+	GIT_DIR  string = ".git"
+	OBJS_DIR string = "/.git/objects"
+	HEAD_LOC string = "/.git/HEAD"
 )
 
 type Object struct {
@@ -76,16 +80,16 @@ func getSize(first_space_index int, data *[]byte) (string, int) {
 func newObject(object_path string) *Object {
 	zlib_bytes, err := os.ReadFile(object_path)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 	// zlib expects an io.Reader object
 	reader, err := zlib.NewReader(bytes.NewReader(zlib_bytes))
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 	bytes, err := io.ReadAll(reader)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 	data_ptr := &bytes
 	type_, first_space_index := getType(data_ptr)
@@ -129,13 +133,15 @@ func getObjectName(object_path string) string {
 }
 
 func getObjects(objects_dir string) map[string]*Object {
-	var objects map[string]*Object
-	objects = make(map[string]*Object)
+	var objects map[string]*Object = make(map[string]*Object)
 	filepath.WalkDir(objects_dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		is_hex, err := regexp.MatchString("^[a-fA-F0-9]+$", filepath.Base(path))
+		if err != nil {
+			log.Fatal(err)
+		}
 		if !d.IsDir() && is_hex {
 			obj := newObject(path)
 			objects[obj.name] = obj
@@ -146,7 +152,7 @@ func getObjects(objects_dir string) map[string]*Object {
 }
 
 func newRepo(location string) *Repo {
-	objects := getObjects(location + "/.git/objects")
+	objects := getObjects(location + OBJS_DIR)
 	return &Repo{location, objects}
 }
 
@@ -226,31 +232,31 @@ func (r *Repo) refresh() {
 }
 
 func (r *Repo) head() string {
-	bytes, err := os.ReadFile(r.location + "/.git/HEAD")
+	bytes, err := os.ReadFile(r.location + HEAD_LOC)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 	return strings.TrimSpace(strings.Split(string(bytes), ":")[1])
 }
 
 func (r *Repo) branch() string {
-	head := r.head()
-	return filepath.Base(head)
+	return filepath.Base(r.head())
 }
 
-func (r *Repo) current_commit() *Object {
-	bytes, err := os.ReadFile(r.location + "/.git/" + r.head())
+func (r *Repo) currentCommit() Commit {
+	bytes, err := os.ReadFile(r.location + fmt.Sprintf("/%s/", GIT_DIR) + r.head())
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
-	return r.getObject(strings.TrimSpace(string(bytes)))
+	return parseCommit(r.getObject(strings.TrimSpace(string(bytes))))
 }
 
 func parseTree(obj *Object) []TreeEntry {
 	var entries []TreeEntry
-	entry_item, start, stop := 1, 0, 6
+	content_len := len(obj.content)
+	entry_item, start, stop := 1, 0, 6 // TODO: don't use magic numbers. Define constants.
 	mode, name, hash := "", "", ""
-	for stop <= len(obj.content) {
+	for stop <= content_len {
 		switch entry_item {
 		// get the mode
 		case 1:
@@ -260,19 +266,19 @@ func parseTree(obj *Object) []TreeEntry {
 		// get the name (file or dir)
 		case 2:
 			i := start
-			for obj.content[i] != NUL && i < len(obj.content)-1 {
+			for obj.content[i] != NUL && i < content_len-1 {
 				i += 1
 			}
 			name = strings.TrimSpace(string(obj.content[start:i]))
 			entry_item += 1
 			start = i + 1
-			stop = start + 20
+			stop = start + 20 // TODO: don't use magic numbers. Define constants.
 		// get the hash (object name)
 		case 3:
 			hash = strings.TrimSpace(hex.EncodeToString(obj.content[start:stop]))
 			entry_item = 1
 			start = stop
-			stop = start + 6
+			stop = start + 6 // TODO: don't use magic numbers. Define constants.
 			entries = append(entries, TreeEntry{mode, name, hash})
 		}
 	}
@@ -280,12 +286,12 @@ func parseTree(obj *Object) []TreeEntry {
 }
 
 func parseCommit(obj *Object) Commit {
-	tree_hash := string(obj.content[5:45])
-	rest_of_content := strings.Split(string(obj.content[46:]), "\n")
+	tree_hash := string(obj.content[5:45])                           // TODO: don't use magic numbers. Define constants.
+	rest_of_content := strings.Split(string(obj.content[46:]), "\n") // TODO: don't use magic numbers. Define constants.
 	var parents []string
 	for _, line := range rest_of_content {
 		if line[:6] == "parent" {
-			parents = append(parents, line[7:47])
+			parents = append(parents, line[7:47]) // TODO: don't use magic numbers. Define constants.
 		} else {
 			break
 		}
@@ -294,34 +300,63 @@ func parseCommit(obj *Object) Commit {
 }
 
 func main() {
-	var repo_path string
-	var db_path string
 
 	app := &cli.App{
 		UseShortOptionHandling: true,
+		Name:                   "gogit",
+		Version:                "v1.0.0",
+		Compiled:               time.Now(),
+		Authors: []*cli.Author{
+			&cli.Author{
+				Name:  "Joseph Doiron",
+				Email: "",
+			},
+		},
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:    "repo-path",
+				Value:   ".",
+				Aliases: []string{"r"},
+				Usage:   "",
+			},
+		},
 		Commands: []*cli.Command{
 			{
 				Name:  "to-sqlite",
-				Usage: "dfsdf",
+				Usage: "Generates a SQLite database representing the Git repo.",
 				Flags: []cli.Flag{
 					&cli.StringFlag{
-						Name:        "repo-path",
-						Value:       ".",
-						Aliases:     []string{"r"},
-						Destination: &repo_path,
-						Usage:       "Pass multiple greetings",
-					},
-					&cli.StringFlag{
-						Name:        "db-path",
-						Value:       "git.sqlite",
-						Aliases:     []string{"d"},
-						Destination: &db_path,
-						Usage:       "Pass multiple greetings",
+						Name:    "db-path",
+						Value:   "git.sqlite",
+						Aliases: []string{"d"},
+						Usage:   "The path to the database to output.",
 					},
 				},
 				Action: func(cCtx *cli.Context) error {
-					repo := newRepo(repo_path)
-					repo.toSQLite(db_path)
+					repo := newRepo(cCtx.String("repo-path"))
+					repo.toSQLite(cCtx.String("db-path"))
+					return nil
+				},
+			},
+			{
+				Name:  "show",
+				Usage: "Shows the content of a Git object.",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "object",
+						Aliases:  []string{"o"},
+						Usage:    "Pass multiple greetings",
+						Required: true,
+					},
+					&cli.BoolFlag{Name: "type", Aliases: []string{"t"}},
+				},
+				Action: func(cCtx *cli.Context) error {
+					obj := newRepo(cCtx.String("repo-path")).getObject(cCtx.String("object"))
+					if cCtx.Bool("type") {
+						fmt.Println(obj.type_)
+					} else {
+						fmt.Println(obj.toJson())
+					}
 					return nil
 				},
 			},
