@@ -1,303 +1,189 @@
 package main
 
 import (
-	"bytes"
-	"compress/zlib"
-	"database/sql"
-	"encoding/hex"
-	"encoding/json"
+	"flag"
 	"fmt"
-	"io"
-	"io/fs"
+	"html/template"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strings"
+	"strconv"
 	"time"
 
+	"github.com/gorilla/websocket"
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/schollz/progressbar/v3"
 	"github.com/urfave/cli/v2"
 )
 
-// Given a byte find the first byte in a data slice that equals the match_byte, returning the index.
-// If no match is found, returns -1
-func findFirstMatch(match_byte byte, start_index int, data *[]byte) int {
-	for i, this_byte := range (*data)[start_index:] {
-		if this_byte == match_byte {
-			return start_index + i
-		}
-	}
-	return -1
-}
-
 const (
-	SPACE    byte   = 32
-	NUL      byte   = 0
-	GIT_DIR  string = ".git"
-	OBJS_DIR string = "/.git/objects"
-	HEAD_LOC string = "/.git/HEAD"
+	// Time allowed to write the file to the client.
+	writeWait = 10 * time.Second
+	// Time allowed to read the next pong message from the client.
+	pongWait = 60 * time.Second
+	// Send pings to client with this period. Must be less than pongWait.
+	pingPeriod = (pongWait * 9) / 10
+	// Poll file for changes with this period.
+	filePeriod = 10 * time.Second
 )
 
-type Object struct {
-	type_    string `json:"type"`
-	size     string `json:"size"`
-	location string `json:"location"`
-	name     string `json:"name"`
-	content  []byte `json:"content"`
-}
-
-type TreeEntry struct {
-	mode string
-	name string
-	hash string
-}
-
-type Commit struct {
-	tree    string
-	parents []string
-}
-
-type Repo struct {
-	location string
-	objects  map[string]*Object
-}
-
-func getType(data *[]byte) (string, int) {
-	first_space_index := findFirstMatch(SPACE, 0, data)
-	type_ := string((*data)[0:first_space_index])
-	return strings.TrimSpace(type_), first_space_index
-}
-
-// second return value is the start of the object's content
-func getSize(first_space_index int, data *[]byte) (string, int) {
-	first_nul_index := findFirstMatch(NUL, first_space_index+1, data)
-	obj_size := string((*data)[first_space_index:first_nul_index])
-	return strings.TrimSpace(obj_size), first_nul_index + 1
-}
-
-func newObject(object_path string) *Object {
-	zlib_bytes, err := os.ReadFile(object_path)
-	if err != nil {
-		log.Fatal(err)
+var (
+	addr      = flag.String("addr", ":8080", "http service address")
+	homeTempl = template.Must(template.New("").Parse(homeHTML))
+	repo      *Repo
+	dir       string
+	upgrader  = websocket.Upgrader{
+		ReadBufferSize:  1024,
+		WriteBufferSize: 1024,
 	}
-	// zlib expects an io.Reader object
-	reader, err := zlib.NewReader(bytes.NewReader(zlib_bytes))
-	if err != nil {
-		log.Fatal(err)
-	}
-	bytes, err := io.ReadAll(reader)
-	if err != nil {
-		log.Fatal(err)
-	}
-	data_ptr := &bytes
-	type_, first_space_index := getType(data_ptr)
-	size, content_start_index := getSize(first_space_index, data_ptr)
-	object_dir := filepath.Base(filepath.Dir(object_path))
-	return &Object{type_, size, object_path, object_dir + filepath.Base(object_path), bytes[content_start_index:]}
-}
+)
 
-func (obj *Object) toJson() string {
-	switch obj.type_ {
-	case "tree":
-		entries := parseTree(obj)
-		output := "[\n"
-		for i, entry := range entries {
-			if i == len(entries)-1 {
-				output += entry.toJson() + "\n"
-			} else {
-				output += entry.toJson() + ",\n"
-			}
-		}
-		return output + "]\n"
-	case "commit":
-		commit := parseCommit(obj)
-		parents, _ := json.Marshal(commit.parents)
-		return fmt.Sprintf(`{"parents": %s, "tree": "%s"}`, string(parents), commit.tree)
-	case "blob":
-		return "\"" + strings.Replace(string(obj.content), `"`, `\"`, -1) + "\""
-	default:
-		return fmt.Sprintf("I'm a %s\n", obj.type_)
-	}
-}
-
-func (e *TreeEntry) toJson() string {
-	return fmt.Sprintf(`{"mode": "%s", "name": "%s", "hash": "%s"}`, e.mode, e.name, e.hash)
-}
-
-func getObjectName(object_path string) string {
-	object_dir := filepath.Base(filepath.Dir(object_path))
-	name := object_dir + filepath.Base(object_path)
-	return name
-}
-
-func getObjects(objects_dir string) map[string]*Object {
-	var objects map[string]*Object = make(map[string]*Object)
-	filepath.WalkDir(objects_dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		is_hex, err := regexp.MatchString("^[a-fA-F0-9]+$", filepath.Base(path))
-		if err != nil {
-			log.Fatal(err)
-		}
-		if !d.IsDir() && is_hex {
-			obj := newObject(path)
-			objects[obj.name] = obj
+func getDirs(root string) ([]byte, error) {
+	var files []byte
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if !info.IsDir() {
+			files = append(append(files, []byte("\n")...), path...)
 		}
 		return nil
 	})
-	return objects
+	return files, err
 }
 
-func newRepo(location string) *Repo {
-	objects := getObjects(location + OBJS_DIR)
-	return &Repo{location, objects}
+func getObjectsIfModified(lastMod time.Time) ([]byte, time.Time, error) {
+	di, err := os.Stat(dir)
+	if err != nil {
+		return nil, lastMod, err
+	}
+	if !di.ModTime().After(lastMod) {
+		return nil, lastMod, nil
+	}
+
+	repo.refresh()
+	return []byte(repo.toJson()), di.ModTime(), nil
 }
 
-func (r *Repo) getObject(name string) *Object {
-	return r.objects[name]
-}
-
-func exec(db *sql.DB, query string) sql.Result {
-	result, err := db.Exec(query)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return result
-}
-
-func (r *Repo) toSQLite(path string) {
-	os.Remove(path)
-
-	db, err := sql.Open("sqlite3", path)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer db.Close()
-
-	exec(db, `create table objects (name text primary key, type text, object jsonb);`)
-	exec(db, `create table edges (src text, dest text);`)
-	objs_stmt, err := db.Prepare("insert into objects(name, type, object) values(?, ?, ?)")
-	if err != nil {
-		log.Fatal(err)
-	}
-	edges_stmt, err := db.Prepare("insert into edges(src, dest) values(?, ?)")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer objs_stmt.Close()
-	defer edges_stmt.Close()
-
-	fmt.Println("[info] generating Git SQLite database...")
-	bar := progressbar.Default(int64(len(r.objects)))
-	for name, obj := range r.objects {
-		_, err = objs_stmt.Exec(name, obj.type_, obj.toJson())
+func reader(ws *websocket.Conn) {
+	defer ws.Close()
+	ws.SetReadLimit(512)
+	ws.SetReadDeadline(time.Now().Add(pongWait))
+	ws.SetPongHandler(func(string) error { ws.SetReadDeadline(time.Now().Add(pongWait)); return nil })
+	for {
+		_, _, err := ws.ReadMessage()
 		if err != nil {
-			log.Fatal(err)
-		}
-		switch obj.type_ {
-		case "commit":
-			commit := parseCommit(obj)
-			// commit edges to parents
-			for _, p := range commit.parents {
-				_, err = edges_stmt.Exec(obj.name, p)
-				if err != nil {
-					log.Fatal(err)
-				}
-			}
-			// commit edge to tree
-			_, err = edges_stmt.Exec(obj.name, commit.tree)
-			if err != nil {
-				log.Fatal(err)
-			}
-		case "tree":
-			entries := parseTree(obj)
-			// tree to blob edges
-			for _, entry := range entries {
-				_, err = edges_stmt.Exec(obj.name, entry.hash)
-				if err != nil {
-					log.Fatal(err)
-				}
-			}
-		}
-		bar.Add(1)
-	}
-}
-
-func (r *Repo) refresh() {
-	objects := getObjects(r.location)
-	r.objects = objects
-}
-
-func (r *Repo) head() string {
-	bytes, err := os.ReadFile(r.location + HEAD_LOC)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return strings.TrimSpace(strings.Split(string(bytes), ":")[1])
-}
-
-func (r *Repo) branch() string {
-	return filepath.Base(r.head())
-}
-
-func (r *Repo) currentCommit() Commit {
-	bytes, err := os.ReadFile(r.location + fmt.Sprintf("/%s/", GIT_DIR) + r.head())
-	if err != nil {
-		log.Fatal(err)
-	}
-	return parseCommit(r.getObject(strings.TrimSpace(string(bytes))))
-}
-
-func parseTree(obj *Object) []TreeEntry {
-	var entries []TreeEntry
-	content_len := len(obj.content)
-	entry_item, start, stop := 1, 0, 6 // TODO: don't use magic numbers. Define constants.
-	mode, name, hash := "", "", ""
-	for stop <= content_len {
-		switch entry_item {
-		// get the mode
-		case 1:
-			mode = strings.TrimSpace(string(obj.content[start:stop]))
-			entry_item += 1
-			start = stop
-		// get the name (file or dir)
-		case 2:
-			i := start
-			for obj.content[i] != NUL && i < content_len-1 {
-				i += 1
-			}
-			name = strings.TrimSpace(string(obj.content[start:i]))
-			entry_item += 1
-			start = i + 1
-			stop = start + 20 // TODO: don't use magic numbers. Define constants.
-		// get the hash (object name)
-		case 3:
-			hash = strings.TrimSpace(hex.EncodeToString(obj.content[start:stop]))
-			entry_item = 1
-			start = stop
-			stop = start + 6 // TODO: don't use magic numbers. Define constants.
-			entries = append(entries, TreeEntry{mode, name, hash})
-		}
-	}
-	return entries
-}
-
-func parseCommit(obj *Object) Commit {
-	tree_hash := string(obj.content[5:45])                           // TODO: don't use magic numbers. Define constants.
-	rest_of_content := strings.Split(string(obj.content[46:]), "\n") // TODO: don't use magic numbers. Define constants.
-	var parents []string
-	for _, line := range rest_of_content {
-		if line[:6] == "parent" {
-			parents = append(parents, line[7:47]) // TODO: don't use magic numbers. Define constants.
-		} else {
 			break
 		}
 	}
-	return Commit{tree_hash, parents}
 }
+
+func writer(ws *websocket.Conn, lastMod time.Time) {
+	lastError := ""
+	pingTicker := time.NewTicker(pingPeriod)
+	fileTicker := time.NewTicker(filePeriod)
+	defer func() {
+		pingTicker.Stop()
+		fileTicker.Stop()
+		ws.Close()
+	}()
+	for {
+		select {
+		case <-fileTicker.C:
+			var objects []byte
+			var err error
+
+			objects, lastMod, err = getObjectsIfModified(lastMod)
+
+			if err != nil {
+				if s := err.Error(); s != lastError {
+					lastError = s
+					objects = []byte(lastError)
+				}
+			} else {
+				lastError = ""
+			}
+
+			if objects != nil {
+				ws.SetWriteDeadline(time.Now().Add(writeWait))
+				if err := ws.WriteMessage(websocket.TextMessage, objects); err != nil {
+					return
+				}
+			}
+		case <-pingTicker.C:
+			ws.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := ws.WriteMessage(websocket.PingMessage, []byte{}); err != nil {
+				return
+			}
+		}
+	}
+}
+
+func serveWs(w http.ResponseWriter, r *http.Request) {
+	ws, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		if _, ok := err.(websocket.HandshakeError); !ok {
+			log.Println(err)
+		}
+		return
+	}
+
+	var lastMod time.Time
+	if n, err := strconv.ParseInt(r.FormValue("lastMod"), 16, 64); err == nil {
+		lastMod = time.Unix(0, n)
+	}
+
+	go writer(ws, lastMod)
+	reader(ws)
+}
+
+func serveHome(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	objects, lastMod, err := getObjectsIfModified(time.Time{})
+	if err != nil {
+		objects = []byte(err.Error())
+		lastMod = time.Unix(0, 0)
+	}
+	var v = struct {
+		Host    string
+		Data    string
+		LastMod string
+	}{
+		r.Host,
+		string(objects),
+		strconv.FormatInt(lastMod.UnixNano(), 16),
+	}
+	homeTempl.Execute(w, &v)
+}
+
+const homeHTML = `<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <title>WebSocket Example</title>
+    </head>
+    <body>
+        <pre id="fileData">{{.Data}}</pre>
+        <script type="text/javascript">
+            (function() {
+                var data = document.getElementById("fileData");
+                var conn = new WebSocket("ws://{{.Host}}/ws?lastMod={{.LastMod}}");
+                conn.onclose = function(evt) {
+                    data.textContent = 'Connection closed';
+                }
+                conn.onmessage = function(evt) {
+                    console.log('file updated');
+                    data.textContent = evt.data;
+                }
+            })();
+        </script>
+    </body>
+</html>
+`
 
 func main() {
 
@@ -339,23 +225,54 @@ func main() {
 				},
 			},
 			{
+				Name:  "serve",
+				Usage: "todo",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:    "repo-path",
+						Value:   ".",
+						Aliases: []string{"p"},
+						Usage:   "todo",
+					},
+				},
+				Action: func(cCtx *cli.Context) error {
+					dir = cCtx.String("repo-path")
+					repo = newRepo(dir)
+					fmt.Printf("Watching %s\n", dir)
+					http.HandleFunc("/", serveHome)
+					http.HandleFunc("/ws", serveWs)
+					server := &http.Server{
+						Addr:              *addr,
+						ReadHeaderTimeout: 3 * time.Second,
+					}
+					if err := server.ListenAndServe(); err != nil {
+						log.Fatal(err)
+					}
+					return nil
+				},
+			},
+			{
 				Name:  "show",
 				Usage: "Shows the content of a Git object.",
 				Flags: []cli.Flag{
 					&cli.StringFlag{
-						Name:     "object",
-						Aliases:  []string{"o"},
-						Usage:    "Pass multiple greetings",
-						Required: true,
+						Name:    "object",
+						Aliases: []string{"o"},
+						Usage:   "Pass multiple greetings",
 					},
 					&cli.BoolFlag{Name: "type", Aliases: []string{"t"}},
 				},
 				Action: func(cCtx *cli.Context) error {
-					obj := newRepo(cCtx.String("repo-path")).getObject(cCtx.String("object"))
-					if cCtx.Bool("type") {
-						fmt.Println(obj.type_)
+					repo := newRepo(cCtx.String("repo-path"))
+					if cCtx.String("object") == "" {
+						fmt.Println(string(repo.toJson()))
 					} else {
-						fmt.Println(obj.toJson())
+						obj := repo.getObject(cCtx.String("object"))
+						if cCtx.Bool("type") {
+							fmt.Println(obj.Type_)
+						} else {
+							fmt.Println(string(obj.toJson()[:]))
+						}
 					}
 					return nil
 				},
