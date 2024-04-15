@@ -24,6 +24,8 @@ const (
 	pingPeriod = (pongWait * 9) / 10
 	// Poll git repo for changes with this period.
 	repoPeriod = 10 * time.Second
+	// message client sends to get objects even if no changes occurred
+	needObjects = "need-objects"
 )
 
 var (
@@ -34,6 +36,7 @@ var (
 	upgrader  = websocket.Upgrader{
 		ReadBufferSize:  1024,
 		WriteBufferSize: 1024,
+		CheckOrigin:     func(r *http.Request) bool { return true },
 	}
 )
 
@@ -73,7 +76,7 @@ func reader(ws *websocket.Conn) {
 		if err != nil {
 			break
 		}
-		if string(p) == "need-objects" {
+		if string(p) == needObjects {
 			ws.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := ws.WriteMessage(websocket.TextMessage, repo.toJson()); err != nil {
 				return
@@ -125,7 +128,6 @@ func serveWs(w http.ResponseWriter, r *http.Request) {
 
 	var num int = getNumberOfFiles(repo.location)
 	var numFiles *int = &num
-	fmt.Println(num)
 	go writer(ws, numFiles)
 	reader(ws)
 }
@@ -142,9 +144,11 @@ func serveHome(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
 	var v = struct {
-		Host string
+		Host        string
+		NeedObjects string
 	}{
 		r.Host,
+		needObjects,
 	}
 	homeTempl.Execute(w, &v)
 }
@@ -160,7 +164,7 @@ const homeHTML = `<!DOCTYPE html>
                 var conn = new WebSocket("ws://{{.Host}}/ws");
 				conn.onopen = function(evt) {
 					console.log("conn open");
-					conn.send("need-objects");
+					conn.send("{{.NeedObjects}}");
 				}
                 conn.onclose = function(evt) {
                     console.log('Connection closed');

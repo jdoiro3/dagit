@@ -13,9 +13,19 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/schollz/progressbar/v3"
+)
+
+const (
+	SPACE    byte   = 32
+	NUL      byte   = 0
+	GIT_DIR  string = ".git"
+	OBJS_DIR string = "/.git/objects"
+	HEAD_LOC string = "/.git/HEAD"
 )
 
 // Given a byte find the first byte in a data slice that equals the match_byte, returning the index.
@@ -29,13 +39,13 @@ func findFirstMatch(match_byte byte, start_index int, data *[]byte) int {
 	return -1
 }
 
-const (
-	SPACE    byte   = 32
-	NUL      byte   = 0
-	GIT_DIR  string = ".git"
-	OBJS_DIR string = "/.git/objects"
-	HEAD_LOC string = "/.git/HEAD"
-)
+func getTime(unixTime string) time.Time {
+	i, err := strconv.ParseInt(unixTime, 10, 64)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return time.Unix(i, 0)
+}
 
 type Edge struct {
 	Src  string `json:"src"`
@@ -50,15 +60,30 @@ type Object struct {
 	Content  []byte `json:"content"`
 }
 
+type Blob struct {
+	Content string `json:"content"`
+	Size    int    `json:"size"`
+}
+
 type TreeEntry struct {
 	Mode string `json:"mode"`
 	Name string `json:"name"`
 	Hash string `json:"hash"`
 }
 
+type User struct {
+	Name  string `json:"name"`
+	Email string `json:"email"`
+}
+
 type Commit struct {
-	Tree    string   `json:"tree"`
-	Parents []string `json:"parents"`
+	Tree       string    `json:"tree"`
+	Parents    []string  `json:"parents"`
+	Author     User      `json:"author"`
+	Committer  User      `json:"committer"`
+	Message    string    `json:"message"`
+	CommitTime time.Time `json:"commitTime"`
+	AuthorTime time.Time `json:"authorTime"`
 }
 
 type Repo struct {
@@ -66,21 +91,24 @@ type Repo struct {
 	objects  map[string]*Object
 }
 
-//func (gd *GraphData) MarshalJSON() ([]byte, error) {
-//	return []byte(`{"data":"charlie"}`), nil
-//}
-
 func getType(data *[]byte) (string, int) {
 	first_space_index := findFirstMatch(SPACE, 0, data)
 	type_ := string((*data)[0:first_space_index])
 	return strings.TrimSpace(type_), first_space_index
 }
 
-// second return value is the start of the object's content
+// gets the object's size
 func getSize(first_space_index int, data *[]byte) (string, int) {
 	first_nul_index := findFirstMatch(NUL, first_space_index+1, data)
 	obj_size := string((*data)[first_space_index:first_nul_index])
+	// second return value is the start of the object's content
 	return strings.TrimSpace(obj_size), first_nul_index + 1
+}
+
+func getObjectName(object_path string) string {
+	object_dir := filepath.Base(filepath.Dir(object_path))
+	name := object_dir + filepath.Base(object_path)
+	return name
 }
 
 func newObject(object_path string) *Object {
@@ -100,8 +128,7 @@ func newObject(object_path string) *Object {
 	data_ptr := &bytes
 	type_, first_space_index := getType(data_ptr)
 	size, content_start_index := getSize(first_space_index, data_ptr)
-	object_dir := filepath.Base(filepath.Dir(object_path))
-	return &Object{type_, size, object_path, object_dir + filepath.Base(object_path), bytes[content_start_index:]}
+	return &Object{type_, size, object_path, getObjectName(object_path), bytes[content_start_index:]}
 }
 
 func (obj *Object) toJson() []byte {
@@ -119,7 +146,7 @@ func (obj *Object) toJson() []byte {
 		}
 		return json_commit
 	case "blob":
-		json_blob, err := json.Marshal(obj)
+		json_blob, err := json.Marshal(parseBlob(obj))
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -127,12 +154,6 @@ func (obj *Object) toJson() []byte {
 	default:
 		return make([]byte, 0)
 	}
-}
-
-func getObjectName(object_path string) string {
-	object_dir := filepath.Base(filepath.Dir(object_path))
-	name := object_dir + filepath.Base(object_path)
-	return name
 }
 
 func getObjects(objects_dir string) map[string]*Object {
@@ -285,7 +306,15 @@ func (r *Repo) currentCommit() Commit {
 	if err != nil {
 		log.Fatal(err)
 	}
-	return *parseCommit(r.getObject(strings.TrimSpace(string(bytes))))
+	return parseCommit(r.getObject(strings.TrimSpace(string(bytes))))
+}
+
+func parseBlob(obj *Object) Blob {
+	size, err := strconv.Atoi(obj.Size)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return Blob{Content: string(obj.Content), Size: size}
 }
 
 func parseTree(obj *Object) *[]TreeEntry {
@@ -322,16 +351,34 @@ func parseTree(obj *Object) *[]TreeEntry {
 	return &entries
 }
 
-func parseCommit(obj *Object) *Commit {
-	tree_hash := string(obj.Content[5:45])                           // TODO: don't use magic numbers. Define constants.
-	rest_of_content := strings.Split(string(obj.Content[46:]), "\n") // TODO: don't use magic numbers. Define constants.
+func parseCommit(obj *Object) Commit {
+	tree_hash := string(obj.Content[5:45]) // TODO: don't use magic numbers. Define constants.
+	content := string(obj.Content[46:])
+	rest_of_content := strings.Split(content, "\n") // TODO: don't use magic numbers. Define constants.
+	// The commit message look to be separated by two newlines and end with a newline
+	msg := strings.Trim(strings.Split(content, "\n\n")[1], "\n")
+
 	var parents []string
+	var author User
+	var committer User
+	var commitTime time.Time
+	var authorTime time.Time
+
 	for _, line := range rest_of_content {
+		if len(line) < 6 {
+			continue
+		}
 		if line[:6] == "parent" {
 			parents = append(parents, line[7:47]) // TODO: don't use magic numbers. Define constants.
-		} else {
-			break
+		} else if line[:6] == "author" {
+			var authorLine []string = strings.Split(line[7:], " ")
+			authorTime = getTime(authorLine[2])
+			author = User{Name: authorLine[0], Email: authorLine[1]}
+		} else if line[:9] == "committer" {
+			var commiterLine []string = strings.Split(line[10:], " ")
+			commitTime = getTime(commiterLine[2])
+			committer = User{Name: commiterLine[0], Email: commiterLine[1]}
 		}
 	}
-	return &Commit{tree_hash, parents}
+	return Commit{tree_hash, parents, author, committer, msg, commitTime, authorTime}
 }
