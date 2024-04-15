@@ -1,4 +1,4 @@
-module github.com/gogit
+module github.com/dagit
 
 go 1.19
 

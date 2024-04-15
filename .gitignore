@@ -15,29 +15,29 @@
 nextjs/dist/*
 
 # dependencies
-/node_modules
-/.pnp
-.pnp.js
-.yarn/install-state.gz
+nextjs/node_modules
+nextjs/.pnp
+nextjs/.pnp.js
+nextjs/.yarn/install-state.gz
 
 # testing
-/coverage
+nextjs/coverage
 
 # next.js
-/.next/
-/out/
+nextjs/.next/
+nextjs/out/
 
 # production
-/build
+nextjs/build
 
 # misc
 .DS_Store
 *.pem
 
 # debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+nextjs/npm-debug.log*
+nextjs/yarn-debug.log*
+nextjs/yarn-error.log*
 
 # local env files
 .env*.local
