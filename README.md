@@ -1,5 +1,5 @@
 # DagGit
 
-Teach Git internals with a live graph.
+*Work in progress.*
 
-Watch an example of using the tool [here](https://youtu.be/UVZydtLrPtc?si=cZkzeegmRFGFoT8Z).
+Teach Git internals with a live graph. Watch the example [here](https://youtu.be/UVZydtLrPtc?si=cZkzeegmRFGFoT8Z).
