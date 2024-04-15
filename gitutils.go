@@ -139,7 +139,7 @@ func getObjects(objects_dir string) map[string]*Object {
 	objects := make(map[string]*Object)
 	filepath.WalkDir(objects_dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return err
+			log.Fatal(err)
 		}
 		is_hex, err := regexp.MatchString("^[a-fA-F0-9]+$", filepath.Base(path))
 		if err != nil {

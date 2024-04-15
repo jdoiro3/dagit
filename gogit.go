@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -18,13 +17,13 @@ import (
 
 const (
 	// Time allowed to write the file to the client.
-	writeWait = 10 * time.Second
+	writeWait = 15 * time.Second
 	// Time allowed to read the next pong message from the client.
 	pongWait = 60 * time.Second
 	// Send pings to client with this period. Must be less than pongWait.
 	pingPeriod = (pongWait * 9) / 10
-	// Poll file for changes with this period.
-	filePeriod = 10 * time.Second
+	// Poll git repo for changes with this period.
+	repoPeriod = 10 * time.Second
 )
 
 var (
@@ -38,28 +37,30 @@ var (
 	}
 )
 
-func getDirs(root string) ([]byte, error) {
-	var files []byte
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if !info.IsDir() {
-			files = append(append(files, []byte("\n")...), path...)
+func getNumberOfFiles(p string) int {
+	i := 0
+	paths, err := os.ReadDir(p)
+	if err != nil {
+		log.Fatal(err, p)
+	}
+	for _, pe := range paths {
+		if pe.IsDir() {
+			i += getNumberOfFiles(filepath.Join(p, pe.Name()))
+		} else {
+			i++
 		}
-		return nil
-	})
-	return files, err
+	}
+	return i
 }
 
-func getObjectsIfModified(lastMod time.Time) ([]byte, time.Time, error) {
-	di, err := os.Stat(dir)
-	if err != nil {
-		return nil, lastMod, err
+func getObjectsIfChange(objsDir string, numFiles *int) []byte {
+	newNumFiles := getNumberOfFiles(objsDir)
+	if newNumFiles != *numFiles {
+		*numFiles = newNumFiles
+		repo.refresh()
+		return repo.toJson()
 	}
-	if !di.ModTime().After(lastMod) {
-		return nil, lastMod, nil
-	}
-
-	repo.refresh()
-	return []byte(repo.toJson()), di.ModTime(), nil
+	return nil
 }
 
 func reader(ws *websocket.Conn) {
@@ -68,38 +69,35 @@ func reader(ws *websocket.Conn) {
 	ws.SetReadDeadline(time.Now().Add(pongWait))
 	ws.SetPongHandler(func(string) error { ws.SetReadDeadline(time.Now().Add(pongWait)); return nil })
 	for {
-		_, _, err := ws.ReadMessage()
+		_, p, err := ws.ReadMessage()
 		if err != nil {
 			break
+		}
+		if string(p) == "need-objects" {
+			ws.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := ws.WriteMessage(websocket.TextMessage, repo.toJson()); err != nil {
+				return
+			}
 		}
 	}
 }
 
-func writer(ws *websocket.Conn, lastMod time.Time) {
-	lastError := ""
+func writer(ws *websocket.Conn, numFiles *int) {
 	pingTicker := time.NewTicker(pingPeriod)
-	fileTicker := time.NewTicker(filePeriod)
+	repoTicker := time.NewTicker(repoPeriod)
+
 	defer func() {
 		pingTicker.Stop()
-		fileTicker.Stop()
+		repoTicker.Stop()
 		ws.Close()
 	}()
+
 	for {
 		select {
-		case <-fileTicker.C:
-			var objects []byte
-			var err error
+		case <-repoTicker.C:
 
-			objects, lastMod, err = getObjectsIfModified(lastMod)
-
-			if err != nil {
-				if s := err.Error(); s != lastError {
-					lastError = s
-					objects = []byte(lastError)
-				}
-			} else {
-				lastError = ""
-			}
+			var objects []byte = nil
+			objects = getObjectsIfChange(repo.location, numFiles)
 
 			if objects != nil {
 				ws.SetWriteDeadline(time.Now().Add(writeWait))
@@ -109,7 +107,7 @@ func writer(ws *websocket.Conn, lastMod time.Time) {
 			}
 		case <-pingTicker.C:
 			ws.SetWriteDeadline(time.Now().Add(writeWait))
-			if err := ws.WriteMessage(websocket.PingMessage, []byte{}); err != nil {
+			if err := ws.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
 		}
@@ -125,12 +123,10 @@ func serveWs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var lastMod time.Time
-	if n, err := strconv.ParseInt(r.FormValue("lastMod"), 16, 64); err == nil {
-		lastMod = time.Unix(0, n)
-	}
-
-	go writer(ws, lastMod)
+	var num int = getNumberOfFiles(repo.location)
+	var numFiles *int = &num
+	fmt.Println(num)
+	go writer(ws, numFiles)
 	reader(ws)
 }
 
@@ -144,19 +140,11 @@ func serveHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	objects, lastMod, err := getObjectsIfModified(time.Time{})
-	if err != nil {
-		objects = []byte(err.Error())
-		lastMod = time.Unix(0, 0)
-	}
+
 	var v = struct {
-		Host    string
-		Data    string
-		LastMod string
+		Host string
 	}{
 		r.Host,
-		string(objects),
-		strconv.FormatInt(lastMod.UnixNano(), 16),
 	}
 	homeTempl.Execute(w, &v)
 }
@@ -167,17 +155,18 @@ const homeHTML = `<!DOCTYPE html>
         <title>WebSocket Example</title>
     </head>
     <body>
-        <pre id="fileData">{{.Data}}</pre>
         <script type="text/javascript">
             (function() {
-                var data = document.getElementById("fileData");
-                var conn = new WebSocket("ws://{{.Host}}/ws?lastMod={{.LastMod}}");
+                var conn = new WebSocket("ws://{{.Host}}/ws");
+				conn.onopen = function(evt) {
+					console.log("conn open");
+					conn.send("need-objects");
+				}
                 conn.onclose = function(evt) {
-                    data.textContent = 'Connection closed';
+                    console.log('Connection closed');
                 }
                 conn.onmessage = function(evt) {
-                    console.log('file updated');
-                    data.textContent = evt.data;
+                    console.log(JSON.parse(evt.data));
                 }
             })();
         </script>
