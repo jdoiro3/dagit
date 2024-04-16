@@ -52,8 +52,18 @@ type Edge struct {
 	Dest string `json:"dest"`
 }
 
+type Head struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
+type Branch struct {
+	Name   string `json:"name"`
+	Commit string `json:"commit"`
+}
+
 type Object struct {
-	Type_    string `json:"type"`
+	Type     string `json:"type"`
 	Size     string `json:"size"`
 	Location string `json:"location"`
 	Name     string `json:"name"`
@@ -132,7 +142,7 @@ func newObject(object_path string) *Object {
 }
 
 func (obj *Object) toJson() []byte {
-	switch obj.Type_ {
+	switch obj.Type {
 	case "tree":
 		json_tree, err := json.Marshal(map[string][]TreeEntry{"entries": *parseTree(obj)})
 		if err != nil {
@@ -193,8 +203,8 @@ func (r *Repo) toJson() []byte {
 		if err != nil {
 			log.Fatal(err)
 		}
-		nodes = append(nodes, map[string]any{"name": obj.Name, "type": obj.Type_, "object": objMap})
-		switch obj.Type_ {
+		nodes = append(nodes, map[string]any{"name": obj.Name, "type": obj.Type, "object": objMap})
+		switch obj.Type {
 		case "commit":
 			commit := parseCommit(obj)
 			// commit edges to parents
@@ -211,6 +221,10 @@ func (r *Repo) toJson() []byte {
 			}
 		}
 	}
+	//nodes = append(nodes, map[string]any{"name": "HEAD", "type": "ref", "object": r.head()})
+	//nodes = append(nodes, map[string]any{"name": r.branch(), "type": "ref", "object": r.head()})
+	//edges = append(edges, Edge{Src: r.branch(), Dest: "HEAD"})
+	//edges = append(edges, Edge{Src: "HEAD", Dest: r.head()})
 	repo_json, err := json.Marshal(map[string]any{"nodes": nodes, "edges": edges})
 	if err != nil {
 		log.Fatal(err)
@@ -251,11 +265,11 @@ func (r *Repo) toSQLite(path string) {
 	fmt.Println("[info] generating Git SQLite database...")
 	bar := progressbar.Default(int64(len(r.objects)))
 	for name, obj := range r.objects {
-		_, err = objs_stmt.Exec(name, obj.Type_, obj.toJson())
+		_, err = objs_stmt.Exec(name, obj.Type, obj.toJson())
 		if err != nil {
 			log.Fatal(err)
 		}
-		switch obj.Type_ {
+		switch obj.Type {
 		case "commit":
 			commit := parseCommit(obj)
 			// commit edges to parents
@@ -289,24 +303,56 @@ func (r *Repo) refresh() {
 	r.objects = objects
 }
 
-func (r *Repo) head() string {
+func (r *Repo) head() Head {
 	bytes, err := os.ReadFile(r.location + HEAD_LOC)
 	if err != nil {
 		log.Fatal(err)
 	}
-	return strings.TrimSpace(strings.Split(string(bytes), ":")[1])
+	var type_ string
+	var value string
+	arr := strings.Split(string(bytes), ":")
+	if len(arr) > 1 {
+		type_ = strings.TrimSpace(arr[0])
+		value = strings.TrimSpace(arr[1])
+		// detached head state. The content should just be a commit hash
+	} else {
+		type_ = "detached"
+		value = strings.TrimSpace(arr[0])
+	}
+	return Head{Type: type_, Value: value}
 }
 
-func (r *Repo) branch() string {
-	return filepath.Base(r.head())
-}
-
-func (r *Repo) currentCommit() Commit {
-	bytes, err := os.ReadFile(r.location + fmt.Sprintf("/%s/", GIT_DIR) + r.head())
+func newBranch(f string) Branch {
+	name := filepath.Base(f)
+	bytes, err := os.ReadFile(f)
 	if err != nil {
 		log.Fatal(err)
 	}
-	return parseCommit(r.getObject(strings.TrimSpace(string(bytes))))
+	return Branch{Name: name, Commit: strings.Trim(string(bytes), "\n")}
+}
+
+func (r *Repo) currBranch() Branch {
+	head := r.head()
+	return newBranch(r.location + fmt.Sprintf("/%s/", GIT_DIR) + head.Value)
+}
+
+func (r *Repo) currCommit() Commit {
+	branch := r.currBranch()
+	return parseCommit(r.getObject(branch.Commit))
+}
+
+func (r *Repo) branches() []Branch {
+	branches := []Branch{}
+	filepath.WalkDir(r.location+fmt.Sprintf("/%s/refs/heads", GIT_DIR), func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			log.Fatal(err)
+		}
+		if !d.IsDir() {
+			branches = append(branches, newBranch(path))
+		}
+		return nil
+	})
+	return branches
 }
 
 func parseBlob(obj *Object) Blob {

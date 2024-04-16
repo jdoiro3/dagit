@@ -43,6 +43,7 @@ function processData(data) {
         }),
         links: data.edges.map(e => ({ source: e.src, target: e.dest }))
     };
+    console.log(gData)
     return {gData: gData, treeEntries: treeEntries};
 }
 
@@ -56,8 +57,7 @@ const ForceGraph = () => {
 
     const { sendMessage, lastMessage, readyState } = useWebSocket("ws://localhost:8080/ws", {
         onOpen: () => {
-            console.log('opened')
-            sendMessage("need-objects")
+            sendMessage("need-objects");
         },
         onMessage: (e) => {
             let data = JSON.parse(e.data);
@@ -67,8 +67,17 @@ const ForceGraph = () => {
             setGraphData(gData);
             setTreeEntries(treeEntries)
         },
+        onClose: (e) => {
+            console.log(e)
+        },
         //Will attempt to reconnect on all close events, such as server shutting down
         shouldReconnect: (closeEvent) => true,
+        heartbeat: {
+            message: 'ping',
+            returnMessage: 'pong',
+            timeout: 30000, // 30 seconds, if no response is received, the connection will be closed
+            interval: 5000, // every 5 seconds, a ping message will be sent
+          },
     });
 
     const handleClose = () => {

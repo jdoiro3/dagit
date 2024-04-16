@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -11,14 +12,14 @@ import (
 )
 
 const (
-	// Time allowed to write the file to the client.
-	writeWait = 15 * time.Second
+	// Time allowed to write git objects to client.
+	writeWait = 10 * time.Second
 	// Time allowed to read the next pong message from the client.
-	pongWait = 60 * time.Second
+	pongWait = 10 * time.Second
 	// Send pings to client with this period. Must be less than pongWait.
 	pingPeriod = (pongWait * 9) / 10
 	// Poll git repo for changes with this period.
-	repoPeriod = 10 * time.Second
+	repoPeriod = 5 * time.Second
 	// message client sends to get objects even if no changes occurred
 	needObjects = "need-objects"
 )
@@ -33,7 +34,8 @@ func getNumberOfFiles(p string) int {
 	i := 0
 	paths, err := os.ReadDir(p)
 	if err != nil {
-		log.Fatal(err, p)
+		log.Println(p)
+		log.Fatal(err)
 	}
 	for _, pe := range paths {
 		if pe.IsDir() {
@@ -48,6 +50,7 @@ func getNumberOfFiles(p string) int {
 func getObjectsIfChange(objsDir string, numFiles *int) []byte {
 	newNumFiles := getNumberOfFiles(objsDir)
 	if newNumFiles != *numFiles {
+		log.Printf("numFiles = %d, newNumFiles = %d\n", *numFiles, newNumFiles)
 		*numFiles = newNumFiles
 		repo.refresh()
 		return repo.toJson()
@@ -66,10 +69,13 @@ func reader(ws *websocket.Conn) {
 			break
 		}
 		if string(msg) == needObjects {
+			log.Printf("objects from %s requested from client ...\n", repo.location)
+			objects := repo.toJson()
 			ws.SetWriteDeadline(time.Now().Add(writeWait))
-			if err := ws.WriteMessage(websocket.TextMessage, repo.toJson()); err != nil {
+			if err := ws.WriteMessage(websocket.TextMessage, objects); err != nil {
 				return
 			}
+			log.Println("objects sent to client.")
 		}
 	}
 }
@@ -89,7 +95,7 @@ func writer(ws *websocket.Conn, numFiles *int) {
 		case <-repoTicker.C:
 
 			var objects []byte = nil
-			objects = getObjectsIfChange(repo.location, numFiles)
+			objects = getObjectsIfChange(repo.location+fmt.Sprintf("/%s", GIT_DIR), numFiles)
 
 			if objects != nil {
 				ws.SetWriteDeadline(time.Now().Add(writeWait))
@@ -115,7 +121,7 @@ func serveWs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var num int = getNumberOfFiles(repo.location)
+	var num int = getNumberOfFiles(repo.location + fmt.Sprintf("/%s", GIT_DIR))
 	var numFiles *int = &num
 	go writer(ws, numFiles)
 	reader(ws)

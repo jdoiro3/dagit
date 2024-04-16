@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log"
@@ -108,10 +109,25 @@ func main() {
 					} else {
 						obj := repo.getObject(cCtx.String("object"))
 						if cCtx.Bool("type") {
-							fmt.Println(obj.Type_)
+							fmt.Println(obj.Type)
 						} else {
 							fmt.Println(string(obj.toJson()[:]))
 						}
+					}
+					return nil
+				},
+			},
+			{
+				Name:  "branches",
+				Usage: "list branches.",
+				Action: func(cCtx *cli.Context) error {
+					repo := newRepo(cCtx.String("repo-path"))
+					for _, b := range repo.branches() {
+						json_bytes, err := json.Marshal(b)
+						if err != nil {
+							log.Fatal(err)
+						}
+						fmt.Println(string(json_bytes))
 					}
 					return nil
 				},
