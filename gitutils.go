@@ -440,19 +440,23 @@ func parseCommit(obj *Object) Commit {
 	var authorTime time.Time
 
 	for _, line := range rest_of_content {
-		if len(line) < 6 {
+		if len(line) < 9 {
 			continue
 		}
 		if line[:6] == "parent" {
 			parents = append(parents, line[7:47]) // TODO: don't use magic numbers. Define constants.
 		} else if line[:6] == "author" {
-			var authorLine []string = strings.Split(line[7:], " ")
-			authorTime = getTime(authorLine[2])
-			author = User{Name: authorLine[0], Email: authorLine[1]}
+			nameEnd := strings.Index(line, "<")
+			name := line[7:nameEnd]
+			var authorLine []string = strings.Split(line[nameEnd:], " ")
+			authorTime = getTime(authorLine[1])
+			author = User{Name: name, Email: authorLine[0]}
 		} else if line[:9] == "committer" {
-			var commiterLine []string = strings.Split(line[10:], " ")
-			commitTime = getTime(commiterLine[2])
-			committer = User{Name: commiterLine[0], Email: commiterLine[1]}
+			nameEnd := strings.Index(line, "<")
+			name := line[10:nameEnd]
+			var commiterLine []string = strings.Split(line[nameEnd:], " ")
+			commitTime = getTime(commiterLine[1])
+			committer = User{Name: name, Email: commiterLine[0]}
 		}
 	}
 	return Commit{tree_hash, parents, author, committer, msg, commitTime, authorTime}
