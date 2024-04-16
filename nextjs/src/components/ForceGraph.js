@@ -94,12 +94,15 @@ const ForceGraph = () => {
         fg.d3Force('y', 
             d3.forceY()
                 .y(node => {
-                    if (node.type === "commit") {
-                        return -100
-                    } else if (node.type === "tree") {
-                        return 0
-                    } else {
-                        return 800
+                    switch (node.type) {
+                        case "ref":
+                            return -150
+                        case "commit":
+                            return -100
+                        case "tree":
+                            return 0
+                        default:
+                            return 800
                     }
                 }).strength(.5)
         );
@@ -127,6 +130,30 @@ const ForceGraph = () => {
             onNodeClick={node => {
                 handleShow(true)
                 setModalNode(node)
+            }}
+            nodeCanvasObject={(node, ctx, globalScale) => {
+                if (node.type === "ref") {
+                    const label = node.id;
+                    const fontSize = 12/globalScale;
+                    ctx.font = `${fontSize}px Sans-Serif`;
+                    const textWidth = ctx.measureText(label).width;
+                    const bckgDimensions = [textWidth, fontSize].map(n => n + fontSize * 0.2); // some padding
+        
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                    ctx.fillRect(node.x - bckgDimensions[0] / 2, node.y - bckgDimensions[1] / 2, ...bckgDimensions);
+        
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillStyle = node.color;
+                    ctx.fillText(label, node.x, node.y);
+        
+                    node.__bckgDimensions = bckgDimensions; // to re-use in nodePointerAreaPaint
+                } else {
+                    ctx.fillStyle = node.color;
+                    ctx.beginPath();
+                    ctx.arc(node.x, node.y, 10, 0, 2 * Math.PI, false); 
+                    ctx.fill();
+                }
             }}
         />
         <ObjectModal 

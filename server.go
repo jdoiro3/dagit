@@ -1,11 +1,8 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -19,7 +16,7 @@ const (
 	// Send pings to client with this period. Must be less than pongWait.
 	pingPeriod = (pongWait * 9) / 10
 	// Poll git repo for changes with this period.
-	repoPeriod = 5 * time.Second
+	repoPeriod = 3 * time.Second
 	// message client sends to get objects even if no changes occurred
 	needObjects = "need-objects"
 )
@@ -30,28 +27,9 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin:     func(r *http.Request) bool { return true },
 }
 
-func getNumberOfFiles(p string) int {
-	i := 0
-	paths, err := os.ReadDir(p)
-	if err != nil {
-		log.Println(p)
-		log.Fatal(err)
-	}
-	for _, pe := range paths {
-		if pe.IsDir() {
-			i += getNumberOfFiles(filepath.Join(p, pe.Name()))
-		} else {
-			i++
-		}
-	}
-	return i
-}
-
-func getObjectsIfChange(objsDir string, numFiles *int) []byte {
-	newNumFiles := getNumberOfFiles(objsDir)
-	if newNumFiles != *numFiles {
-		log.Printf("numFiles = %d, newNumFiles = %d\n", *numFiles, newNumFiles)
-		*numFiles = newNumFiles
+func getObjectsIfChange(repo *Repo) []byte {
+	if repo.changed() {
+		log.Printf("repo changed")
 		repo.refresh()
 		return repo.toJson()
 	}
@@ -80,7 +58,7 @@ func reader(ws *websocket.Conn) {
 	}
 }
 
-func writer(ws *websocket.Conn, numFiles *int) {
+func writer(ws *websocket.Conn) {
 	pingTicker := time.NewTicker(pingPeriod)
 	repoTicker := time.NewTicker(repoPeriod)
 
@@ -95,7 +73,7 @@ func writer(ws *websocket.Conn, numFiles *int) {
 		case <-repoTicker.C:
 
 			var objects []byte = nil
-			objects = getObjectsIfChange(repo.location+fmt.Sprintf("/%s", GIT_DIR), numFiles)
+			objects = getObjectsIfChange(repo)
 
 			if objects != nil {
 				ws.SetWriteDeadline(time.Now().Add(writeWait))
@@ -120,9 +98,6 @@ func serveWs(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-
-	var num int = getNumberOfFiles(repo.location + fmt.Sprintf("/%s", GIT_DIR))
-	var numFiles *int = &num
-	go writer(ws, numFiles)
+	go writer(ws)
 	reader(ws)
 }

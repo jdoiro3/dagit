@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gosimple/hashdir"
 	"github.com/schollz/progressbar/v3"
 )
 
@@ -99,6 +100,7 @@ type Commit struct {
 type Repo struct {
 	location string
 	objects  map[string]*Object
+	checksum string
 }
 
 func getType(data *[]byte) (string, int) {
@@ -187,7 +189,28 @@ func getObjects(objects_dir string) map[string]*Object {
 
 func newRepo(location string) *Repo {
 	objects := getObjects(location + OBJS_DIR)
-	return &Repo{location, objects}
+	dirHash, err := hashdir.Make(location+fmt.Sprintf("/%s", GIT_DIR), "md5")
+	if err != nil {
+		log.Fatal(err)
+	}
+	return &Repo{
+		location: location,
+		objects:  objects,
+		checksum: dirHash,
+	}
+}
+
+func (r *Repo) changed() bool {
+	dirHash, err := hashdir.Make(r.location+fmt.Sprintf("/%s", GIT_DIR), "md5")
+	if err != nil {
+		log.Fatal(err)
+	}
+	if r.checksum != dirHash {
+		log.Printf("%s != %s", r.checksum, dirHash)
+		r.checksum = dirHash
+		return true
+	}
+	return false
 }
 
 func (r *Repo) getObject(name string) *Object {
@@ -197,6 +220,7 @@ func (r *Repo) getObject(name string) *Object {
 func (r *Repo) toJson() []byte {
 	edges := []Edge{}
 	nodes := []map[string]any{}
+	// add objects
 	for _, obj := range r.objects {
 		var objMap map[string]json.RawMessage
 		err := json.Unmarshal(obj.toJson(), &objMap)
@@ -221,10 +245,15 @@ func (r *Repo) toJson() []byte {
 			}
 		}
 	}
-	//nodes = append(nodes, map[string]any{"name": "HEAD", "type": "ref", "object": r.head()})
-	//nodes = append(nodes, map[string]any{"name": r.branch(), "type": "ref", "object": r.head()})
-	//edges = append(edges, Edge{Src: r.branch(), Dest: "HEAD"})
-	//edges = append(edges, Edge{Src: "HEAD", Dest: r.head()})
+	// add refs/branches
+	head := r.head()
+	nodes = append(nodes, map[string]any{"name": "HEAD", "type": "ref", "object": head})
+	edges = append(edges, Edge{Src: "HEAD", Dest: filepath.Base(head.Value)})
+	for _, b := range r.branches() {
+		nodes = append(nodes, map[string]any{"name": b.Name, "type": "ref", "object": b})
+		edges = append(edges, Edge{Src: b.Name, Dest: b.Commit})
+	}
+
 	repo_json, err := json.Marshal(map[string]any{"nodes": nodes, "edges": edges})
 	if err != nil {
 		log.Fatal(err)
