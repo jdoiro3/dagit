@@ -8,7 +8,7 @@ state:
 Git is a content-addressable filesystem. Great. What does that mean?
 ```
 
-It means you should `dagit` (pronounced like `maggot`). Also, read the docs linked above, but
+It means you should `dagit` (rhymes with `maggot`). Also, read the docs linked above, but
 again, `dagit`. It's as simple as running:
 
 ```bash
