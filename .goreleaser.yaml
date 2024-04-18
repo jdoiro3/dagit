@@ -42,7 +42,16 @@ archives:
 
 dockers:
   - image_templates:
-      - user/repo
+      - "docker.io/jdoiro3/dagit:{{ .Tag }}"
+      - "docker.io/jdoiro3/dagit:v{{ .Major }}"
+      - "docker.io/jdoiro3/dagit:v{{ .Major }}.{{ .Minor }}"
+      - "docker.io/jdoiro3/dagit:latest"
+  - build_flag_templates:
+      - "--pull"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
 
 changelog:
   sort: asc
