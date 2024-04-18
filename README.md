@@ -1,8 +1,31 @@
 # DagGit
-
 *Work in progress.*
 
-Teach Git internals with a live graph. Watch the example [here](https://youtu.be/UVZydtLrPtc?si=cZkzeegmRFGFoT8Z).
+Git's docs on its [Internals](https://git-scm.com/book/en/v2/Git-Internals-Git-Objects)
+state:
+
+```
+Git is a content-addressable filesystem. Great. What does that mean?
+```
+
+It means you should `dagit` (rhymes with `maggot`). Also, read the docs linked above, but
+again, `dagit`. It's as simple as running:
+
+```bash
+cd repo/path
+dagit start-app
+```
+
+And then run `git` commands in another terminal.
+
+## Setup
+*Planning on packaging binary soon*
+
+```
+git clone && cd nextjs && yarn export && cd ../ && go install
+```
+
+## Demo
 
 ![output](https://github.com/jdoiro3/DaGit/assets/57968347/dd27aba3-d0f8-4ef3-a45d-b3a6d3d47e83)
 
