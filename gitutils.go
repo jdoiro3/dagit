@@ -22,11 +22,9 @@ import (
 )
 
 const (
-	SPACE    byte   = 32
-	NUL      byte   = 0
-	GIT_DIR  string = ".git"
-	OBJS_DIR string = "/.git/objects"
-	HEAD_LOC string = "/.git/HEAD"
+	SPACE byte   = 32
+	NUL   byte   = 0
+	GIT   string = ".git"
 )
 
 // Given a byte find the first byte in a data slice that equals the match_byte, returning the index.
@@ -187,9 +185,13 @@ func getObjects(objects_dir string) map[string]*Object {
 	return objects
 }
 
+func gitDir(location string) string {
+	return location + "/" + GIT
+}
+
 func newRepo(location string) *Repo {
-	objects := getObjects(location + OBJS_DIR)
-	dirHash, err := hashdir.Make(location+fmt.Sprintf("/%s", GIT_DIR), "md5")
+	objects := getObjects(gitDir(location) + "/objects")
+	dirHash, err := hashdir.Make(gitDir(location), "md5")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -201,7 +203,7 @@ func newRepo(location string) *Repo {
 }
 
 func (r *Repo) changed() bool {
-	dirHash, err := hashdir.Make(r.location+fmt.Sprintf("/%s", GIT_DIR), "md5")
+	dirHash, err := hashdir.Make(gitDir(r.location), "md5")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -333,7 +335,7 @@ func (r *Repo) refresh() {
 }
 
 func (r *Repo) head() Head {
-	bytes, err := os.ReadFile(r.location + HEAD_LOC)
+	bytes, err := os.ReadFile(gitDir(r.location) + "/HEAD")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -362,7 +364,7 @@ func newBranch(f string) Branch {
 
 func (r *Repo) currBranch() Branch {
 	head := r.head()
-	return newBranch(r.location + fmt.Sprintf("/%s/", GIT_DIR) + head.Value)
+	return newBranch(r.location + fmt.Sprintf("/%s/", GIT) + head.Value)
 }
 
 func (r *Repo) currCommit() Commit {
@@ -372,7 +374,7 @@ func (r *Repo) currCommit() Commit {
 
 func (r *Repo) branches() []Branch {
 	branches := []Branch{}
-	filepath.WalkDir(r.location+fmt.Sprintf("/%s/refs/heads", GIT_DIR), func(path string, d fs.DirEntry, err error) error {
+	filepath.WalkDir(r.location+fmt.Sprintf("/%s/refs/heads", GIT), func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -429,8 +431,8 @@ func parseTree(obj *Object) *[]TreeEntry {
 func parseCommit(obj *Object) Commit {
 	tree_hash := string(obj.Content[5:45]) // TODO: don't use magic numbers. Define constants.
 	content := string(obj.Content[46:])
-	rest_of_content := strings.Split(content, "\n") // TODO: don't use magic numbers. Define constants.
-	// The commit message look to be separated by two newlines and end with a newline
+	rest_of_content := strings.Split(content, "\n")
+	// The commit message looks to be separated by two newlines and ends with a newline
 	msg := strings.Trim(strings.Split(content, "\n\n")[1], "\n")
 
 	var parents []string
