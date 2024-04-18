@@ -23,7 +23,10 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v4
       - run: npm install -g yarn
-      - run: yarn install --frozen-lockfile
+      - run: |
+          cd nextjs
+          yarn install --frozen-lockfile
+          cd ../
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
