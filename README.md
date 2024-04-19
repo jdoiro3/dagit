@@ -43,3 +43,8 @@ docker run --rm -it -v ${PWD}:/path/to/repo --entrypoint /bin/sh jdoiro3/dagit
 <img width="1464" alt="Screenshot 2024-04-16 at 5 02 56 PM" src="https://github.com/jdoiro3/DaGit/assets/57968347/0ae1c50f-e4af-406b-9ca8-02a13a8001de">
 
 <img width="952" alt="Screenshot 2024-04-16 at 5 06 33 PM" src="https://github.com/jdoiro3/DaGit/assets/57968347/77523d09-f5aa-40e0-a054-3edf1f45bd64">
+
+## TODO
+
+- [ ] Parse/unpack Git packfiles
+- [ ] Write tests
