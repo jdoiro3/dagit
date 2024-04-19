@@ -34,9 +34,11 @@ docker pull jdoiro3/dagit:latest
 docker run --rm -it -v ${PWD}:/path/to/repo --entrypoint /bin/sh jdoiro3/dagit
 ```
 
-## Demo
+## Demos
 
 ![output](https://github.com/jdoiro3/DaGit/assets/57968347/dd27aba3-d0f8-4ef3-a45d-b3a6d3d47e83)
+
+See a longer demo [here](https://www.youtube.com/watch?v=ltedKFWv1oo).
 
 ## Screenshots
 
