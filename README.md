@@ -18,11 +18,20 @@ dagit start-app
 
 And then run `git` commands in another terminal.
 
-## Setup
-*Planning on packaging binary soon*
+## Install
 
+### Homebrew
+
+```bash
+brew install jdoiro3/dagit/dagit
+dagit -h
 ```
-git clone && cd nextjs && yarn export && cd ../ && go install
+
+### Docker
+
+```bash
+docker pull jdoiro3/dagit:latest
+docker run --rm -it -v ${PWD}:/path/to/repo --entrypoint /bin/sh jdoiro3/dagit
 ```
 
 ## Demo
