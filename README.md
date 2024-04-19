@@ -13,7 +13,7 @@ again, `dagit`. It's as simple as running:
 
 ```bash
 cd repo/path
-dagit start-app
+dagit start
 ```
 
 And then run `git` commands in another terminal.
