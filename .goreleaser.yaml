@@ -65,7 +65,6 @@ brews:
     repository:
       owner: jdoiro3
       name: homebrew-dagit
-      tap:
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
     directory: Formula
     goarm: "7"
