@@ -2,7 +2,6 @@ package main
 
 import (
 	"embed"
-	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log"
@@ -28,6 +27,7 @@ func main() {
 
 	app := &cli.App{
 		UseShortOptionHandling: true,
+		Usage:                  "Cli that lets you visualize Git's internals among other things.",
 		Name:                   "dagit",
 		Version:                "v1.0.0",
 		Compiled:               time.Now(),
@@ -39,10 +39,10 @@ func main() {
 		},
 		Flags: []cli.Flag{
 			&cli.StringFlag{
-				Name:    "repo-path",
+				Name:    "repo",
 				Value:   ".",
 				Aliases: []string{"r"},
-				Usage:   "",
+				Usage:   "The path to the Git repo.",
 			},
 		},
 		Commands: []*cli.Command{
@@ -51,21 +51,21 @@ func main() {
 				Usage: "Generates a SQLite database representing the Git repo.",
 				Flags: []cli.Flag{
 					&cli.StringFlag{
-						Name:    "db-path",
+						Name:    "db",
 						Value:   "git.sqlite",
 						Aliases: []string{"d"},
 						Usage:   "The path to the database to output.",
 					},
 				},
 				Action: func(cCtx *cli.Context) error {
-					repo := newRepo(cCtx.String("repo-path"))
-					repo.toSQLite(cCtx.String("db-path"))
+					repo := newRepo(cCtx.String("repo"))
+					repo.toSQLite(cCtx.String("db"))
 					return nil
 				},
 			},
 			{
-				Name:  "start-app",
-				Usage: "Starts the DaGit app.",
+				Name:  "start",
+				Usage: "Starts the dagit visualization in the browser.",
 				Flags: []cli.Flag{
 					&cli.StringFlag{
 						Name:    "repo-path",
@@ -75,7 +75,7 @@ func main() {
 					},
 				},
 				Action: func(cCtx *cli.Context) error {
-					dir := cCtx.String("repo-path")
+					dir := cCtx.String("repo")
 					repo = newRepo(dir)
 					// The static Next.js app will be served under `/`.
 					http.Handle("/", http.FileServer(http.FS(distFS)))
@@ -103,7 +103,7 @@ func main() {
 					&cli.BoolFlag{Name: "type", Aliases: []string{"t"}},
 				},
 				Action: func(cCtx *cli.Context) error {
-					repo := newRepo(cCtx.String("repo-path"))
+					repo := newRepo(cCtx.String("repo"))
 					if cCtx.String("object") == "" {
 						fmt.Println(string(repo.toJson()))
 					} else {
@@ -113,21 +113,6 @@ func main() {
 						} else {
 							fmt.Println(string(obj.toJson()[:]))
 						}
-					}
-					return nil
-				},
-			},
-			{
-				Name:  "branches",
-				Usage: "list branches.",
-				Action: func(cCtx *cli.Context) error {
-					repo := newRepo(cCtx.String("repo-path"))
-					for _, b := range repo.branches() {
-						json_bytes, err := json.Marshal(b)
-						if err != nil {
-							log.Fatal(err)
-						}
-						fmt.Println(string(json_bytes))
 					}
 					return nil
 				},

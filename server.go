@@ -29,7 +29,7 @@ var upgrader = websocket.Upgrader{
 
 func getObjectsIfChange(repo *Repo) []byte {
 	if repo.changed() {
-		log.Printf("repo changed")
+		log.Printf("Repo changed. Refreshing data...")
 		repo.refresh()
 		return repo.toJson()
 	}

@@ -208,7 +208,6 @@ func (r *Repo) changed() bool {
 		log.Fatal(err)
 	}
 	if r.checksum != dirHash {
-		log.Printf("%s != %s", r.checksum, dirHash)
 		r.checksum = dirHash
 		return true
 	}
