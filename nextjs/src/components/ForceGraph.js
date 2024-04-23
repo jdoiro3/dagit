@@ -18,24 +18,25 @@ function extToLanguage(fileName) {
         ".css": "css",
         ".json": "json",
     };
-    if (ext in extToLang) {
-        return extToLang[ext];
-    } else {
-        return "text";
-    }
+    return ext in extToLang ? extToLang[ext] : "text";
 }
 
-function processData(data) {
+function toObj(arr, keyFunc) {
+    var rv = {};
+    for (var i = 0; i < arr.length; ++i)
+      rv[keyFunc(arr[i])] = arr[i];
+    return rv;
+  }
+
+function processData(data, currNodes) {
     let treeEntries = {};
     const gData = {
-        nodes: data.nodes.map(n => {
-            let value
-            if (n.type === "blob") {
-                value = n.object.content;
-            } else {
-                value = n;
+        nodes: data.nodes.map(obj => {
+            let value = obj.type === "blob" ? obj.object.content: obj
+            let node = { id: obj.name, type: obj.type, value: value };
+            if (node.id in currNodes) {
+                node = {...currNodes[node.id], ...node}
             }
-            let node = { id: n.name, type: n.type, value: value };
             if (node.type === "tree") {
                 node.value.object.entries.forEach(e => treeEntries[e.hash] = e);
             }
@@ -43,7 +44,6 @@ function processData(data) {
         }),
         links: data.edges.map(e => ({ source: e.src, target: e.dest }))
     };
-    console.log(gData)
     return {gData: gData, treeEntries: treeEntries};
 }
 
@@ -61,9 +61,7 @@ const ForceGraph = () => {
         },
         onMessage: (e) => {
             let data = JSON.parse(e.data);
-            console.log(data);
-            let {gData, treeEntries} = processData(data);
-            console.log(gData)
+            let {gData, treeEntries} = processData(data, toObj(graphData.nodes, n => n.id));
             setGraphData(gData);
             setTreeEntries(treeEntries)
         },
