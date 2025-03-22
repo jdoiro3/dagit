@@ -6,10 +6,12 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -25,17 +27,27 @@ const (
 	SPACE byte   = 32
 	NUL   byte   = 0
 	GIT   string = ".git"
+	TAB   string = "    "
 )
 
+// Consumes a channel and adds values to a slice, returning the slice.
+func toSlice[T interface{}](c chan T) []T {
+	s := make([]T, 0)
+	for i := range c {
+		s = append(s, i)
+	}
+	return s
+}
+
 // Given a byte find the first byte in a data slice that equals the match_byte, returning the index.
-// If no match is found, returns -1
-func findFirstMatch(match_byte byte, start_index int, data *[]byte) int {
-	for i, this_byte := range (*data)[start_index:] {
-		if this_byte == match_byte {
-			return start_index + i
+// If no match is found, returns -1 and an error
+func findFirstMatch(match byte, start int, data *[]byte) (int, error) {
+	for i, this_byte := range (*data)[start:] {
+		if this_byte == match {
+			return start + i, nil
 		}
 	}
-	return -1
+	return -1, errors.New(fmt.Sprintf("Could not find %x in '% x'", match, data))
 }
 
 func getTime(unixTime string) time.Time {
@@ -101,33 +113,40 @@ type Repo struct {
 	checksum string
 }
 
-func getType(data *[]byte) (string, int) {
-	first_space_index := findFirstMatch(SPACE, 0, data)
-	type_ := string((*data)[0:first_space_index])
-	return strings.TrimSpace(type_), first_space_index
+// gets the object's type (e.g., blob)
+func getType(data *[]byte) (string, int, error) {
+	spaceIndex, err := findFirstMatch(SPACE, 0, data)
+	if err != nil {
+		slog.Warn(err.Error())
+		return "", -1, fmt.Errorf("could not get type given byte sequence: % x", data)
+	}
+	type_ := string((*data)[0:spaceIndex])
+	return strings.TrimSpace(type_), spaceIndex, nil
 }
 
 // gets the object's size
-func getSize(first_space_index int, data *[]byte) (string, int) {
-	first_nul_index := findFirstMatch(NUL, first_space_index+1, data)
-	obj_size := string((*data)[first_space_index:first_nul_index])
-	// second return value is the start of the object's content
-	return strings.TrimSpace(obj_size), first_nul_index + 1
-}
-
-func getObjectName(object_path string) string {
-	object_dir := filepath.Base(filepath.Dir(object_path))
-	name := object_dir + filepath.Base(object_path)
-	return name
-}
-
-func newObject(object_path string) *Object {
-	zlib_bytes, err := os.ReadFile(object_path)
+func getSize(spaceIndex int, data *[]byte) (string, int, error) {
+	nulIndex, err := findFirstMatch(NUL, spaceIndex+1, data)
 	if err != nil {
-		log.Fatal(err)
+		slog.Warn(err.Error())
+		return "", -1, fmt.Errorf("could not get size given byte sequence: % x", data)
+	}
+	objSize := string((*data)[spaceIndex:nulIndex])
+	// the second return value is the start of the object's content
+	return strings.TrimSpace(objSize), nulIndex + 1, nil
+}
+
+func getObjectName(objPath string) string {
+	return filepath.Base(filepath.Dir(objPath)) + filepath.Base(objPath)
+}
+
+func newObject(objectPath string) *Object {
+	zlibBytes, err := os.ReadFile(objectPath)
+	if err != nil {
+		log.Fatal(objectPath)
 	}
 	// zlib expects an io.Reader object
-	reader, err := zlib.NewReader(bytes.NewReader(zlib_bytes))
+	reader, err := zlib.NewReader(bytes.NewReader(zlibBytes))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -135,48 +154,55 @@ func newObject(object_path string) *Object {
 	if err != nil {
 		log.Fatal(err)
 	}
-	data_ptr := &bytes
-	type_, first_space_index := getType(data_ptr)
-	size, content_start_index := getSize(first_space_index, data_ptr)
-	return &Object{type_, size, object_path, getObjectName(object_path), bytes[content_start_index:]}
+	data := &bytes
+	objType, spaceIndex, err := getType(data)
+	if err != nil {
+		slog.Warn(err.Error())
+	}
+	size, contentStart, err := getSize(spaceIndex, data)
+	if err != nil {
+		slog.Warn(err.Error())
+	}
+	return &Object{objType, size, objectPath, getObjectName(objectPath), bytes[contentStart:]}
 }
 
 func (obj *Object) toJson() []byte {
 	switch obj.Type {
 	case "tree":
-		json_tree, err := json.Marshal(map[string][]TreeEntry{"entries": *parseTree(obj)})
+		tree, err := json.MarshalIndent(map[string][]TreeEntry{"entries": *parseTree(obj)}, "", TAB)
 		if err != nil {
 			log.Fatal(err)
 		}
-		return json_tree
+		return tree
 	case "commit":
-		json_commit, err := json.Marshal(parseCommit(obj))
+		commit, err := json.MarshalIndent(parseCommit(obj), "", TAB)
 		if err != nil {
 			log.Fatal(err)
 		}
-		return json_commit
+		return commit
 	case "blob":
-		json_blob, err := json.Marshal(parseBlob(obj))
+		blob, err := json.MarshalIndent(parseBlob(obj), "", TAB)
 		if err != nil {
 			log.Fatal(err)
 		}
-		return json_blob
+		return blob
 	default:
+		slog.Warn(fmt.Sprintf("Could not convert object, %v, to json", obj.Type))
 		return make([]byte, 0)
 	}
 }
 
-func getObjects(objects_dir string) map[string]*Object {
+func getObjects(objDir string) map[string]*Object {
 	objects := make(map[string]*Object)
-	filepath.WalkDir(objects_dir, func(path string, d fs.DirEntry, err error) error {
+	filepath.WalkDir(objDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			log.Fatal(err)
 		}
-		is_hex, err := regexp.MatchString("^[a-fA-F0-9]+$", filepath.Base(path))
+		isHex, err := regexp.MatchString("^[a-fA-F0-9]+$", filepath.Base(path))
 		if err != nil {
 			log.Fatal(err)
 		}
-		if !d.IsDir() && is_hex {
+		if !d.IsDir() && isHex {
 			obj := newObject(path)
 			objects[obj.Name] = obj
 		}
@@ -214,52 +240,57 @@ func (r *Repo) changed() bool {
 	return false
 }
 
-func (r *Repo) getObject(name string) *Object {
-	return r.objects[name]
+func (r *Repo) getObject(name string) (*Object, error) {
+	obj, ok := r.objects[name]
+	if ok {
+		return obj, nil
+	}
+	return nil, fmt.Errorf("Object, %v, doesn't seem to exist in the repo", name)
 }
 
-func (r *Repo) toJson() []byte {
-	edges := []Edge{}
-	nodes := []map[string]any{}
+func (r *Repo) toJsonGraph() []byte {
+	edgesChan := make(chan Edge)
+	nodesChan := make(chan map[string]any)
 	// add objects
 	for _, obj := range r.objects {
-		var objMap map[string]json.RawMessage
-		err := json.Unmarshal(obj.toJson(), &objMap)
-		if err != nil {
-			log.Fatal(err)
-		}
-		nodes = append(nodes, map[string]any{"name": obj.Name, "type": obj.Type, "object": objMap})
-		switch obj.Type {
-		case "commit":
-			commit := parseCommit(obj)
-			// commit edges to parents
-			for _, p := range commit.Parents {
-				edges = append(edges, Edge{Src: obj.Name, Dest: p})
+		go func(obj *Object, edgesChan chan Edge, nodesChan chan map[string]any) {
+			var objMap map[string]json.RawMessage
+			err := json.Unmarshal(obj.toJson(), &objMap)
+			if err != nil {
+				log.Fatal(err)
 			}
-			// commit edge to tree
-			edges = append(edges, Edge{Src: obj.Name, Dest: commit.Tree})
-		case "tree":
-			entries := *parseTree(obj)
-			// tree to blob edges
-			for _, entry := range entries {
-				edges = append(edges, Edge{Src: obj.Name, Dest: entry.Hash})
+			nodesChan <- map[string]any{"name": obj.Name, "type": obj.Type, "object": objMap}
+			switch obj.Type {
+			case "commit":
+				commit := parseCommit(obj)
+				// commit edges to parents
+				for _, p := range commit.Parents {
+					edgesChan <- Edge{Src: obj.Name, Dest: p}
+				}
+				// commit edge to tree
+				edgesChan <- Edge{Src: obj.Name, Dest: commit.Tree}
+			case "tree":
+				entries := *parseTree(obj)
+				// tree to blob edges
+				for _, entry := range entries {
+					edgesChan <- Edge{Src: obj.Name, Dest: entry.Hash}
+				}
 			}
-		}
+		}(obj, edgesChan, nodesChan)
 	}
 	// add refs/branches
 	head := r.head()
-	nodes = append(nodes, map[string]any{"name": "HEAD", "type": "ref", "object": head})
-	edges = append(edges, Edge{Src: "HEAD", Dest: filepath.Base(head.Value)})
+	nodesChan <- map[string]any{"name": "HEAD", "type": "ref", "object": head}
+	edgesChan <- Edge{Src: "HEAD", Dest: filepath.Base(head.Value)}
 	for _, b := range r.branches() {
-		nodes = append(nodes, map[string]any{"name": b.Name, "type": "ref", "object": b})
-		edges = append(edges, Edge{Src: b.Name, Dest: b.Commit})
+		nodesChan <- map[string]any{"name": b.Name, "type": "ref", "object": b}
+		edgesChan <- Edge{Src: b.Name, Dest: b.Commit}
 	}
-
-	repo_json, err := json.Marshal(map[string]any{"nodes": nodes, "edges": edges})
+	repoGraph, err := json.MarshalIndent(map[string]any{"nodes": toSlice(nodesChan), "edges": toSlice(edgesChan)}, "", TAB)
 	if err != nil {
 		log.Fatal(err)
 	}
-	return repo_json
+	return repoGraph
 }
 
 func exec(db *sql.DB, query string) sql.Result {
@@ -368,7 +399,11 @@ func (r *Repo) currBranch() Branch {
 
 func (r *Repo) currCommit() Commit {
 	branch := r.currBranch()
-	return parseCommit(r.getObject(branch.Commit))
+	obj, err := r.getObject(branch.Commit)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return parseCommit(obj)
 }
 
 func (r *Repo) branches() []Branch {

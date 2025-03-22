@@ -31,7 +31,7 @@ func getObjectsIfChange(repo *Repo) []byte {
 	if repo.changed() {
 		log.Printf("Repo changed. Refreshing data...")
 		repo.refresh()
-		return repo.toJson()
+		return repo.toJsonGraph()
 	}
 	return nil
 }
@@ -48,7 +48,7 @@ func reader(ws *websocket.Conn) {
 		}
 		if string(msg) == needObjects {
 			log.Printf("objects from %s requested from client ...\n", repo.location)
-			objects := repo.toJson()
+			objects := repo.toJsonGraph()
 			ws.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := ws.WriteMessage(websocket.TextMessage, objects); err != nil {
 				return

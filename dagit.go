@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"time"
@@ -98,16 +99,19 @@ func main() {
 					&cli.StringFlag{
 						Name:    "object",
 						Aliases: []string{"o"},
-						Usage:   "Pass multiple greetings",
+						Usage:   "TODO",
 					},
 					&cli.BoolFlag{Name: "type", Aliases: []string{"t"}},
 				},
 				Action: func(cCtx *cli.Context) error {
 					repo := newRepo(cCtx.String("repo"))
 					if cCtx.String("object") == "" {
-						fmt.Println(string(repo.toJson()))
+						fmt.Println(string(repo.toJsonGraph()))
 					} else {
-						obj := repo.getObject(cCtx.String("object"))
+						obj, err := repo.getObject(cCtx.String("object"))
+						if err != nil {
+							slog.Warn(err.Error())
+						}
 						if cCtx.Bool("type") {
 							fmt.Println(obj.Type)
 						} else {
