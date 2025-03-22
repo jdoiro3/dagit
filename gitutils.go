@@ -6,17 +6,19 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"log"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gosimple/hashdir"
@@ -31,12 +33,31 @@ const (
 )
 
 // Consumes a channel and adds values to a slice, returning the slice.
-func toSlice[T interface{}](c chan T) []T {
+func toSlice[T interface{}](c <-chan T) []T {
+	fmt.Println("Starting")
 	s := make([]T, 0)
 	for i := range c {
+		fmt.Println(i)
 		s = append(s, i)
 	}
 	return s
+}
+
+func parallelWork[T any, R any](data []T, worker func(T) R) <-chan R {
+	results := make(chan R)
+	var wg sync.WaitGroup
+	for _, i := range data {
+		wg.Add(1)
+		go func(i T) {
+			defer wg.Done()
+			results <- worker(i)
+		}(i)
+	}
+	go func(wg *sync.WaitGroup, results chan R) {
+		wg.Wait()
+		close(results)
+	}(&wg, results)
+	return results
 }
 
 // Given a byte find the first byte in a data slice that equals the match_byte, returning the index.
@@ -47,7 +68,7 @@ func findFirstMatch(match byte, start int, data *[]byte) (int, error) {
 			return start + i, nil
 		}
 	}
-	return -1, errors.New(fmt.Sprintf("Could not find %x in '% x'", match, data))
+	return -1, fmt.Errorf("could not find %x in '% x'", match, data)
 }
 
 func getTime(unixTime string) time.Time {
@@ -188,7 +209,7 @@ func (obj *Object) toJson() []byte {
 		return blob
 	default:
 		slog.Warn(fmt.Sprintf("Could not convert object, %v, to json", obj.Type))
-		return make([]byte, 0)
+		return []byte("{}")
 	}
 }
 
@@ -249,44 +270,58 @@ func (r *Repo) getObject(name string) (*Object, error) {
 }
 
 func (r *Repo) toJsonGraph() []byte {
-	edgesChan := make(chan Edge)
-	nodesChan := make(chan map[string]any)
-	// add objects
-	for _, obj := range r.objects {
-		go func(obj *Object, edgesChan chan Edge, nodesChan chan map[string]any) {
-			var objMap map[string]json.RawMessage
-			err := json.Unmarshal(obj.toJson(), &objMap)
-			if err != nil {
-				log.Fatal(err)
-			}
-			nodesChan <- map[string]any{"name": obj.Name, "type": obj.Type, "object": objMap}
-			switch obj.Type {
-			case "commit":
-				commit := parseCommit(obj)
-				// commit edges to parents
-				for _, p := range commit.Parents {
-					edgesChan <- Edge{Src: obj.Name, Dest: p}
-				}
-				// commit edge to tree
-				edgesChan <- Edge{Src: obj.Name, Dest: commit.Tree}
-			case "tree":
-				entries := *parseTree(obj)
-				// tree to blob edges
-				for _, entry := range entries {
-					edgesChan <- Edge{Src: obj.Name, Dest: entry.Hash}
-				}
-			}
-		}(obj, edgesChan, nodesChan)
+
+	type Data struct {
+		Nodes []map[string]any
+		Edges []Edge
 	}
+
+	getNodesAndEdges := func(obj *Object) Data {
+		edges := []Edge{}
+		nodes := []map[string]any{}
+		var objMap map[string]json.RawMessage
+
+		err := json.Unmarshal(obj.toJson(), &objMap)
+		if err != nil {
+			log.Fatal(err)
+		}
+		nodes = append(nodes, map[string]any{"name": obj.Name, "type": obj.Type, "object": objMap})
+		switch obj.Type {
+		case "commit":
+			commit := parseCommit(obj)
+			// commit edges to parents
+			for _, p := range commit.Parents {
+				edges = append(edges, Edge{Src: obj.Name, Dest: p})
+			}
+			// commit edge to tree
+			edges = append(edges, Edge{Src: obj.Name, Dest: commit.Tree})
+		case "tree":
+			entries := *parseTree(obj)
+			// tree to blob edges
+			for _, entry := range entries {
+				edges = append(edges, Edge{Src: obj.Name, Dest: entry.Hash})
+			}
+		}
+		return Data{Edges: edges, Nodes: nodes}
+	}
+
+	edges := []Edge{}
+	nodes := []map[string]any{}
+	for d := range parallelWork(slices.Collect(maps.Values(r.objects)), getNodesAndEdges) {
+		edges = append(edges, d.Edges...)
+		nodes = append(nodes, d.Nodes...)
+	}
+
 	// add refs/branches
 	head := r.head()
-	nodesChan <- map[string]any{"name": "HEAD", "type": "ref", "object": head}
-	edgesChan <- Edge{Src: "HEAD", Dest: filepath.Base(head.Value)}
+	nodes = append(nodes, map[string]any{"name": "HEAD", "type": "ref", "object": head})
+	edges = append(edges, Edge{Src: "HEAD", Dest: filepath.Base(head.Value)})
 	for _, b := range r.branches() {
-		nodesChan <- map[string]any{"name": b.Name, "type": "ref", "object": b}
-		edgesChan <- Edge{Src: b.Name, Dest: b.Commit}
+		nodes = append(nodes, map[string]any{"name": b.Name, "type": "ref", "object": b})
+		edges = append(edges, Edge{Src: b.Name, Dest: b.Commit})
 	}
-	repoGraph, err := json.MarshalIndent(map[string]any{"nodes": toSlice(nodesChan), "edges": toSlice(edgesChan)}, "", TAB)
+
+	repoGraph, err := json.MarshalIndent(map[string]any{"nodes": nodes, "edges": edges}, "", TAB)
 	if err != nil {
 		log.Fatal(err)
 	}
