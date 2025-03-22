@@ -18,7 +18,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gosimple/hashdir"
@@ -29,55 +28,7 @@ const (
 	SPACE byte   = 32
 	NUL   byte   = 0
 	GIT   string = ".git"
-	TAB   string = "    "
 )
-
-// Consumes a channel and adds values to a slice, returning the slice.
-func toSlice[T interface{}](c <-chan T) []T {
-	fmt.Println("Starting")
-	s := make([]T, 0)
-	for i := range c {
-		fmt.Println(i)
-		s = append(s, i)
-	}
-	return s
-}
-
-func parallelWork[T any, R any](data []T, worker func(T) R) <-chan R {
-	results := make(chan R)
-	var wg sync.WaitGroup
-	for _, i := range data {
-		wg.Add(1)
-		go func(i T) {
-			defer wg.Done()
-			results <- worker(i)
-		}(i)
-	}
-	go func(wg *sync.WaitGroup, results chan R) {
-		wg.Wait()
-		close(results)
-	}(&wg, results)
-	return results
-}
-
-// Given a byte find the first byte in a data slice that equals the match_byte, returning the index.
-// If no match is found, returns -1 and an error
-func findFirstMatch(match byte, start int, data *[]byte) (int, error) {
-	for i, this_byte := range (*data)[start:] {
-		if this_byte == match {
-			return start + i, nil
-		}
-	}
-	return -1, fmt.Errorf("could not find %x in '% x'", match, data)
-}
-
-func getTime(unixTime string) time.Time {
-	i, err := strconv.ParseInt(unixTime, 10, 64)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return time.Unix(i, 0)
-}
 
 type Edge struct {
 	Src  string `json:"src"`
@@ -328,15 +279,8 @@ func (r *Repo) toJsonGraph() []byte {
 	return repoGraph
 }
 
-func exec(db *sql.DB, query string) sql.Result {
-	result, err := db.Exec(query)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return result
-}
-
 func (r *Repo) toSQLite(path string) {
+	slog.Info(fmt.Sprintf("Removing existing sqlite database at: %v...", path))
 	os.Remove(path)
 
 	db, err := sql.Open("sqlite3", path)
@@ -344,24 +288,25 @@ func (r *Repo) toSQLite(path string) {
 		log.Fatal(err)
 	}
 	defer db.Close()
+	execSql(db, `CREATE TABLE objects (name text primary key, type text, object jsonb);`)
+	execSql(db, `CREATE TABLE edges (src text, dest text);`)
+	// these two commands allow for concurrent writes without encountering "database is locked" errors.
+	execSql(db, "PRAGMA journal_mode = WAL;")
+	execSql(db, "PRAGMA synchronous = normal;")
 
-	exec(db, `create table objects (name text primary key, type text, object jsonb);`)
-	exec(db, `create table edges (src text, dest text);`)
-	objs_stmt, err := db.Prepare("insert into objects(name, type, object) values(?, ?, ?)")
+	objsStmt, err := db.Prepare("INSERT INTO objects(name, type, object) values(?, ?, ?)")
 	if err != nil {
 		log.Fatal(err)
 	}
-	edges_stmt, err := db.Prepare("insert into edges(src, dest) values(?, ?)")
+	edgesStmt, err := db.Prepare("INSERT INTO edges(src, dest) values(?, ?)")
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer objs_stmt.Close()
-	defer edges_stmt.Close()
+	defer objsStmt.Close()
+	defer edgesStmt.Close()
 
-	fmt.Println("[info] generating Git SQLite database...")
-	bar := progressbar.Default(int64(len(r.objects)))
-	for name, obj := range r.objects {
-		_, err = objs_stmt.Exec(name, obj.Type, obj.toJson())
+	insertObjectToTables := func(obj *Object) int {
+		_, err = objsStmt.Exec(obj.Name, obj.Type, obj.toJson())
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -370,13 +315,13 @@ func (r *Repo) toSQLite(path string) {
 			commit := parseCommit(obj)
 			// commit edges to parents
 			for _, p := range commit.Parents {
-				_, err = edges_stmt.Exec(obj.Name, p)
+				_, err = edgesStmt.Exec(obj.Name, p)
 				if err != nil {
 					log.Fatal(err)
 				}
 			}
 			// commit edge to tree
-			_, err = edges_stmt.Exec(obj.Name, commit.Tree)
+			_, err = edgesStmt.Exec(obj.Name, commit.Tree)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -384,13 +329,19 @@ func (r *Repo) toSQLite(path string) {
 			entries := *parseTree(obj)
 			// tree to blob edges
 			for _, entry := range entries {
-				_, err = edges_stmt.Exec(obj.Name, entry.Hash)
+				_, err = edgesStmt.Exec(obj.Name, entry.Hash)
 				if err != nil {
 					log.Fatal(err)
 				}
 			}
+
 		}
-		bar.Add(1)
+		return 1
+	}
+
+	bar := progressbar.Default(int64(len(r.objects)))
+	for n := range parallelWork(slices.Collect(maps.Values(r.objects)), insertObjectToTables) {
+		bar.Add(n)
 	}
 }
 
