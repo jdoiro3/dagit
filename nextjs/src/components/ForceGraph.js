@@ -94,9 +94,9 @@ const ForceGraph = () => {
                 .y(node => {
                     switch (node.type) {
                         case "ref":
-                            return -150
+                            return -500
                         case "commit":
-                            return -100
+                            return -20
                         case "tree":
                             return 0
                         default:
@@ -104,7 +104,7 @@ const ForceGraph = () => {
                     }
                 }).strength(.5)
         );
-        fg.d3Force('collide', d3.forceCollide(30));
+        fg.d3Force('collide', d3.forceCollide(60));
     }, []);
 
     return (
@@ -132,7 +132,7 @@ const ForceGraph = () => {
             nodeCanvasObject={(node, ctx, globalScale) => {
                 if (node.type === "ref") {
                     const label = node.id;
-                    const fontSize = 12/globalScale;
+                    const fontSize = Math.min(30, 15 / globalScale);
                     ctx.font = `${fontSize}px Sans-Serif`;
                     const textWidth = ctx.measureText(label).width;
                     const bckgDimensions = [textWidth, fontSize].map(n => n + fontSize * 0.2); // some padding
@@ -149,7 +149,7 @@ const ForceGraph = () => {
                 } else {
                     ctx.fillStyle = node.color;
                     ctx.beginPath();
-                    ctx.arc(node.x, node.y, 10, 0, 2 * Math.PI, false); 
+                    ctx.arc(node.x, node.y, Math.min(30, 15 / globalScale), 0, 2 * Math.PI, false); 
                     ctx.fill();
                 }
             }}
