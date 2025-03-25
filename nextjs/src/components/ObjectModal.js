@@ -3,8 +3,6 @@ import Modal from 'react-bootstrap/Modal';
 
 function ObjectModal({show, handleClose, name, content}) {
 
-    console.log(content)
-
     return (
         <>
         <Modal show={show} onHide={handleClose} size={"lg"} centered={true}>

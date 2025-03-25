@@ -1,7 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -29,7 +31,7 @@ var upgrader = websocket.Upgrader{
 
 func getObjectsIfChange(repo *Repo) []byte {
 	if repo.changed() {
-		log.Printf("Repo changed. Refreshing data...")
+		slog.Info("Repo changed. Refreshing data...")
 		repo.refresh()
 		return repo.toJsonGraph()
 	}
@@ -47,13 +49,13 @@ func reader(ws *websocket.Conn) {
 			break
 		}
 		if string(msg) == needObjects {
-			log.Printf("objects from %s requested from client ...\n", repo.location)
+			slog.Info(fmt.Sprintf("objects from %s requested from client ...\n", repo.Location))
 			objects := repo.toJsonGraph()
 			ws.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := ws.WriteMessage(websocket.TextMessage, objects); err != nil {
 				return
 			}
-			log.Println("objects sent to client.")
+			slog.Info(fmt.Sprintf("%d objects sent to client.", len(repo.Objects)))
 		}
 	}
 }
