@@ -221,6 +221,10 @@ const ForceGraph = () => {
                 handleShow(true)
                 setModalNode(node)
             }}
+            onNodeDragEnd={node => {
+                node.fx = node.x;
+                node.fy = node.y;
+            }}
             nodeCanvasObject={drawNode}
         />
         <ObjectModal 
