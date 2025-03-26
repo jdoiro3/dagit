@@ -59,10 +59,14 @@ function setLinkData(gData) {
         const b = gData.nodes.find(obj => {
             return obj.id === link.target;
         });
-        !a.links && (a.links = []);
-        !b.links && (b.links = []);
-        a.links.push(link);
-        b.links.push(link);
+        if (a) {
+            !a.links && (a.links = []);
+            a.links.push(link);
+        }
+        if (b) {
+            !b.links && (b.links = []);
+            b.links.push(link);
+        }
     });
 }
 
@@ -79,14 +83,14 @@ function getCommitXAxis(gData) {
             return 0
         }
     }).forEach((node, i) => {
-        m[node.value.object.commitTime] = (i*50)-500;
+        m[node.value.object.commitTime] = (i*50)-1000;
     })
     return m;
 }
 
 const ForceGraph = () => {
     const NODE_R = 20;
-    const xMin = -500;
+    const xMin = -1000;
     const fgRef = useRef();
 
     const [graphData, setGraphData] = useState({ nodes: [], links: [] });
@@ -138,8 +142,6 @@ const ForceGraph = () => {
             ctx.textBaseline = 'middle';
             ctx.fillStyle = node.color;
             ctx.fillText(label, node.x, node.y);
-
-            node.__bckgDimensions = bckgDimensions; // to re-use in nodePointerAreaPaint
         } else {
             ctx.fillStyle = node.color;
             ctx.beginPath();
@@ -160,33 +162,51 @@ const ForceGraph = () => {
 
     const handleNodeHover = node => {
         highlightLinks.clear();
-        if (node) {
+        if (node && node.links) {
             node.links.forEach(link => highlightLinks.add(link));
         }
         setHighlightLinks(highlightLinks);
     };
 
+    const getRandX = (node, min, max) => {
+        if (node.randX) {
+            return node.randX;
+        } else {
+            node.randX = randomIntFromInterval(min, max);
+            return node.randX;
+        }
+    }
+
+    const getRandY = (node, min, max) => {
+        if (node.randY) {
+            return node.randY;
+        } else {
+            node.randY = randomIntFromInterval(min, max);
+            return node.randY;
+        }
+    }
 
     useEffect(() => {
         const xMax = Math.max(...Object.values(commitDatesToX));
         const fg = fgRef.current;
+        fg.d3Force("center", null);
         fg.d3Force("y", 
             d3.forceY()
                 .y(node => {
                     switch (node.type) {
                         case "ref":
-                            return randomIntFromInterval(-600, -500);
+                            return getRandY(node, -600, -500);
                         case "commit":
-                            return randomIntFromInterval(-150, -50);
+                            return getRandY(node, -150, -50);
                         case "tree":
                             const parentTree = graphData.nodes.find(n => n.type === "tree" && n.value.object.entries.find(e => e.hash === node.id));
                             if (parentTree) {
-                                return randomIntFromInterval(80+300, 250+300);
+                                return getRandY(node, 80+300, 250+300);
                             } else {
-                                return randomIntFromInterval(80, 250);
+                                return getRandY(node, 80, 250);
                             }
                         default:
-                            return randomIntFromInterval(800, 1200);
+                            return getRandY(node, 800, 1200);
                     }
                 }).strength(.5)
         );
@@ -200,17 +220,17 @@ const ForceGraph = () => {
                         if (commit) {
                             return commitDatesToX[commit.value.object.commitTime];
                         } else {
-                            return randomIntFromInterval(xMin, xMax);
+                            return getRandX(node, xMin, xMax);
                         }
                     } else if (node.type === "ref") {
                         const commit = graphData.nodes.find(n => n.id === node.value.object.commit);
                         if (commit) {
                             return commitDatesToX[commit.value.object.commitTime];
                         } else {
-                            return randomIntFromInterval(xMin, xMax);
+                            return getRandX(node, xMin, xMax);
                         }
                     } else {
-                        return randomIntFromInterval(xMin, xMax);
+                        return getRandX(node, xMin, xMax);
                     }
                 }).strength(1)
         );
@@ -239,26 +259,9 @@ const ForceGraph = () => {
                 handleShow(true)
                 setModalNode(node)
             }}
-            onNodeDrag={node => {
-                graphData.nodes.forEach(n => {
-                    if (n.id !== node.id) {
-                        n.fx = n.x;
-                        n.fy = n.y;
-                    } else {
-                        console.log(node.x, node.y)
-                    }
-                })
-            }}
             onNodeDragEnd={node => {
-                graphData.nodes.forEach(n => {
-                    if (n.id !== node.id) {
-                        n.fx = null;
-                        n.fy = null;
-                    } else {
-                        n.fx = node.x;
-                        n.fy = node.y;
-                    }
-                })
+                node.fx = node.x;
+                node.fy = node.y
             }}
             nodeCanvasObject={drawNode}
         />
@@ -269,7 +272,7 @@ const ForceGraph = () => {
             content={
                 modalNode.type !== "blob" ? 
                 <ReactJson src={modalNode.value} name={null} />: 
-                <SyntaxHighlighter language={extToLanguage(treeEntries[modalNode.id].name)} style={docco}>
+                <SyntaxHighlighter language={treeEntries[modalNode.id] ? extToLanguage(treeEntries[modalNode.id].name) : "text"} style={docco}>
                     {modalNode.value}
                 </SyntaxHighlighter>
             }
