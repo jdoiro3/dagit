@@ -32,7 +32,7 @@ function toObj(arr, keyFunc) {
     return rv;
   }
 
-function processData(data, currNodes) {
+function processGitData(data, currNodes) {
     let treeEntries = {};
     const gData = {
         nodes: data.nodes.map(obj => {
@@ -51,9 +51,44 @@ function processData(data, currNodes) {
     return {gData: gData, treeEntries: treeEntries};
 }
 
+function setLinkData(gData) {
+    gData.links.forEach(link => {
+        const a = gData.nodes.find(obj => {
+            return obj.id === link.source;
+        });
+        const b = gData.nodes.find(obj => {
+            return obj.id === link.target;
+        });
+        !a.links && (a.links = []);
+        !b.links && (b.links = []);
+        a.links.push(link);
+        b.links.push(link);
+    });
+}
+
+function getCommitXAxis(gData) {
+    let m = {};
+    gData.nodes.filter((node) => node.type === "commit").sort((a, b) => {
+        let aCommitTime = Date.parse(a.value.object.commitTime);
+        let bCommitTime = Date.parse(b.value.object.commitTime);
+        if (aCommitTime < bCommitTime) {
+            return -1
+        } else if (aCommitTime > bCommitTime) {
+            return 1
+        } else {
+            return 0
+        }
+    }).forEach((node, i) => {
+        m[node.value.object.commitTime] = (i*50)-500;
+    })
+    return m;
+}
+
 const ForceGraph = () => {
-    const NODE_R = 15;
+    const NODE_R = 20;
+    const xMin = -500;
     const fgRef = useRef();
+
     const [graphData, setGraphData] = useState({ nodes: [], links: [] });
     const [treeEntries, setTreeEntries] = useState({})
     const [modalNode, setModalNode] = useState({});
@@ -62,43 +97,16 @@ const ForceGraph = () => {
     const [highlightLinks, setHighlightLinks] = useState(new Set());
     const [commitDatesToX, setCommitDatesToX] = useState({})
 
+    // handle messages from dagit server
     const { sendMessage, lastMessage, readyState } = useWebSocket("ws://localhost:8080/ws", {
         onOpen: () => {
             sendMessage("need-objects");
         },
         onMessage: (e) => {
             let data = JSON.parse(e.data);
-            let {gData, treeEntries} = processData(data, toObj(graphData.nodes, n => n.id));
-
-            // for link highlighting
-            gData.links.forEach(link => {
-                const a = gData.nodes.find(obj => {
-                    return obj.id === link.source
-                });
-                const b = gData.nodes.find(obj => {
-                    return obj.id === link.target
-                });
-                !a.links && (a.links = []);
-                !b.links && (b.links = []);
-                a.links.push(link);
-                b.links.push(link);
-            });
-
-            let commitMap = {}
-            gData.nodes.filter((node) => node.type === "commit").sort((a, b) => {
-                let aCommitTime = Date.parse(a.value.object.commitTime)
-                let bCommitTime = Date.parse(b.value.object.commitTime)
-                if (aCommitTime < bCommitTime) {
-                    return -1
-                } else if (aCommitTime > bCommitTime) {
-                    return 1
-                } else {
-                    return 0
-                }
-            }).forEach((node, i) => {
-                commitMap[node.value.object.commitTime] = (i*50)-500
-            })
-            setCommitDatesToX(commitMap);
+            let {gData, treeEntries} = processGitData(data, toObj(graphData.nodes, n => n.id));
+            setLinkData(gData);
+            setCommitDatesToX(getCommitXAxis(gData));
             setGraphData(gData);
             setTreeEntries(treeEntries);
         },
@@ -167,13 +175,18 @@ const ForceGraph = () => {
                 .y(node => {
                     switch (node.type) {
                         case "ref":
-                            return -500
+                            return randomIntFromInterval(-600, -500);
                         case "commit":
-                            return randomIntFromInterval(-150, -50)
+                            return randomIntFromInterval(-150, -50);
                         case "tree":
-                            return randomIntFromInterval(80, 250)
+                            const parentTree = graphData.nodes.find(n => n.type === "tree" && n.value.object.entries.find(e => e.hash === node.id));
+                            if (parentTree) {
+                                return randomIntFromInterval(80+300, 250+300);
+                            } else {
+                                return randomIntFromInterval(80, 250);
+                            }
                         default:
-                            return randomIntFromInterval(500, 800)
+                            return randomIntFromInterval(800, 1200);
                     }
                 }).strength(.5)
         );
@@ -181,23 +194,28 @@ const ForceGraph = () => {
             d3.forceX()
                 .x(node => {
                     if (node.type === "commit") {
-                        return commitDatesToX[node.value.object.commitTime]
+                        return commitDatesToX[node.value.object.commitTime];
                     } else if (node.type === "tree") {
-                        const commit = graphData.nodes.find(n => {
-                            return n.type === "commit" && n.value.object.tree === node.id
-                        })
+                        const commit = graphData.nodes.find(n => n.type === "commit" && n.value.object.tree === node.id);
                         if (commit) {
-                            return commitDatesToX[commit.value.object.commitTime]
+                            return commitDatesToX[commit.value.object.commitTime];
                         } else {
-                            return node.x
+                            return randomIntFromInterval(xMin, xMax);
+                        }
+                    } else if (node.type === "ref") {
+                        const commit = graphData.nodes.find(n => n.id === node.value.object.commit);
+                        if (commit) {
+                            return commitDatesToX[commit.value.object.commitTime];
+                        } else {
+                            return randomIntFromInterval(xMin, xMax);
                         }
                     } else {
-                        return randomIntFromInterval(-500, xMax)
+                        return randomIntFromInterval(xMin, xMax);
                     }
                 }).strength(1)
         );
-        fg.d3Force("link", d3.forceLink().strength(.01));
-        fg.d3Force("collide", d3.forceCollide(10));
+        fg.d3Force("link", d3.forceLink().strength(.001));
+        fg.d3Force("collide", d3.forceCollide(30).strength(.5));
     }, [commitDatesToX, graphData.nodes]);
 
     return (
@@ -221,9 +239,26 @@ const ForceGraph = () => {
                 handleShow(true)
                 setModalNode(node)
             }}
+            onNodeDrag={node => {
+                graphData.nodes.forEach(n => {
+                    if (n.id !== node.id) {
+                        n.fx = n.x;
+                        n.fy = n.y;
+                    } else {
+                        console.log(node.x, node.y)
+                    }
+                })
+            }}
             onNodeDragEnd={node => {
-                node.fx = node.x;
-                node.fy = node.y;
+                graphData.nodes.forEach(n => {
+                    if (n.id !== node.id) {
+                        n.fx = null;
+                        n.fy = null;
+                    } else {
+                        n.fx = node.x;
+                        n.fy = node.y;
+                    }
+                })
             }}
             nodeCanvasObject={drawNode}
         />
