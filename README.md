@@ -16,9 +16,13 @@ cd repo/path
 dagit start
 ```
 
-And then run `git` commands in another terminal.
+Then, run `git` commands in another terminal.
 
-## Install
+Below is the Git object graph for `dagit`. Much wow.
+
+<img width="1249" alt="Dagit Git graph" src="https://github.com/user-attachments/assets/3a7c529e-7592-4eae-85e8-5d16926039b7" />
+
+## Installation
 
 ### Homebrew
 
@@ -33,20 +37,3 @@ dagit -h
 docker pull jdoiro3/dagit:latest
 docker run --rm -it -v ${PWD}:/path/to/repo --entrypoint /bin/sh jdoiro3/dagit
 ```
-
-## Demos
-
-![output](https://github.com/jdoiro3/DaGit/assets/57968347/dd27aba3-d0f8-4ef3-a45d-b3a6d3d47e83)
-
-See a longer demo [here](https://www.youtube.com/watch?v=ltedKFWv1oo).
-
-## Screenshots
-
-<img width="1464" alt="Screenshot 2024-04-16 at 5 02 56 PM" src="https://github.com/jdoiro3/DaGit/assets/57968347/0ae1c50f-e4af-406b-9ca8-02a13a8001de">
-
-<img width="952" alt="Screenshot 2024-04-16 at 5 06 33 PM" src="https://github.com/jdoiro3/DaGit/assets/57968347/77523d09-f5aa-40e0-a054-3edf1f45bd64">
-
-## TODO
-
-- [ ] Parse/unpack Git packfiles
-- [ ] Write tests
