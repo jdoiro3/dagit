@@ -7,6 +7,7 @@ on:
     # run only against tags
     tags:
       - "*"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -43,8 +44,7 @@ jobs:
         with:
           # either 'goreleaser' (default) or 'goreleaser-pro'
           distribution: goreleaser
-          # 'latest', 'nightly', or a semver
-          version: latest
+          version: '~> v2'
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
