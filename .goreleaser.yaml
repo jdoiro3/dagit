@@ -21,20 +21,12 @@ builds:
   - env:
       - CGO_ENABLED=0
     goos:
-      - linux/amd64
-      - linux/arm
-      - linux/arm64
-      - linux/loong64
-      - linux/mips
-      - linux/mips64
-      - linux/mips64le
-      - linux/mipsle
-      - linux/ppc64
-      - linux/ppc64le
-      - linux/riscv64
-      - linux/s390x
+      - linux
       - windows
       - darwin
+    goarch:
+      - amd64
+      - arm64
 
 archives:
   - formats: [ binary ]
