@@ -16,7 +16,9 @@ cd repo/path
 dagit start
 ```
 
-Then, run `git` commands in another terminal.
+Then, run `git` commands in another terminal. Here's an example:
+
+![output](https://github.com/user-attachments/assets/2070535b-5033-4bd0-9202-bbedc22d4cc3)
 
 Below is the Git object graph for `dagit`. Much wow.
 
