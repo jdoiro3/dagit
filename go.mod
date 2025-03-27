@@ -3,6 +3,7 @@ module github.com/dagit
 go 1.23
 
 require (
+	github.com/ChimeraCoder/gitgo v0.0.0-20161029171727-9921b284ef36
 	github.com/gorilla/websocket v1.5.1
 	github.com/gosimple/hashdir v1.0.2
 	github.com/mattn/go-sqlite3 v1.14.22
@@ -11,7 +12,6 @@ require (
 )
 
 require (
-	github.com/ChimeraCoder/gitgo v0.0.0-20161029171727-9921b284ef36 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.2 // indirect
 	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
