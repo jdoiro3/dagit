@@ -18,7 +18,7 @@ dagit start
 
 Then, run `git` commands in another terminal. Here's an example:
 
-![output](https://github.com/user-attachments/assets/2070535b-5033-4bd0-9202-bbedc22d4cc3)
+![dagit-demo](https://github.com/user-attachments/assets/e9572447-4c83-4f4d-8980-e6eba598e825)
 
 Below is the Git object graph for `dagit`. Much wow.
 
