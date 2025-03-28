@@ -16,11 +16,13 @@ cd repo/path
 dagit start
 ```
 
-Then, run `git` commands in another terminal.
+Then, run `git` commands in another terminal. Here's an example:
+
+![dagit-demo](https://github.com/user-attachments/assets/e9572447-4c83-4f4d-8980-e6eba598e825)
 
 Below is the Git object graph for `dagit`. Much wow.
 
-<img width="1249" alt="Dagit Git graph" src="https://github.com/user-attachments/assets/3a7c529e-7592-4eae-85e8-5d16926039b7" />
+<img width="1418" alt="dagit-git-dag" src="https://github.com/user-attachments/assets/04911bc9-c17a-4f27-b214-4ade61c6a778" />
 
 ## Installation
 
