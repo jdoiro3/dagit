@@ -59,7 +59,7 @@ func main() {
 					},
 				},
 				Action: func(cCtx *cli.Context) error {
-					repo := newRepo(cCtx.String("repo"))
+					repo := NewRepo(cCtx.String("repo"))
 					repo.toSQLite(cCtx.String("db"))
 					return nil
 				},
@@ -77,7 +77,7 @@ func main() {
 				},
 				Action: func(cCtx *cli.Context) error {
 					dir := cCtx.String("repo")
-					repo = newRepo(dir)
+					repo = NewRepo(dir)
 					// The static Next.js app will be served under `/`.
 					http.Handle("/", http.FileServer(http.FS(distFS)))
 					http.HandleFunc("/ws", serveWs)
@@ -104,18 +104,18 @@ func main() {
 					&cli.BoolFlag{Name: "type", Aliases: []string{"t"}},
 				},
 				Action: func(cCtx *cli.Context) error {
-					repo := newRepo(cCtx.String("repo"))
+					repo := NewRepo(cCtx.String("repo"))
 					if cCtx.String("object") == "" {
-						fmt.Println(string(repo.toJsonGraph()))
+						fmt.Println(string(repo.ToJsonGraph()))
 					} else {
-						obj, err := repo.getObject(cCtx.String("object"))
+						obj, err := repo.GetObject(cCtx.String("object"))
 						if err != nil {
 							slog.Warn(err.Error())
 						}
 						if cCtx.Bool("type") {
 							fmt.Println(obj.Type)
 						} else {
-							fmt.Println(string(obj.toJson()[:]))
+							fmt.Println(string(obj.ToJson()[:]))
 						}
 					}
 					return nil

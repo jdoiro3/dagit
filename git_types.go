@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -47,6 +48,45 @@ type Object struct {
 	Content  []byte `json:"content"`
 }
 
+func NewObject(objectPath string) *Object {
+	data := getBytes(objectPath, true)
+	objType, spaceIndex, err := GetType(data)
+	if err != nil {
+		slog.Warn(err.Error())
+	}
+	size, contentStart, err := GetSize(spaceIndex, data)
+	if err != nil {
+		slog.Warn(err.Error())
+	}
+	return &Object{objType, size, objectPath, getObjectName(objectPath), data[contentStart:]}
+}
+
+func (obj *Object) ToJson() []byte {
+	switch obj.Type {
+	case "tree":
+		tree, err := json.MarshalIndent(map[string][]*TreeEntry{"entries": ParseTree(obj)}, "", TAB)
+		if err != nil {
+			log.Fatal(err)
+		}
+		return tree
+	case "commit":
+		commit, err := json.MarshalIndent(*ParseCommit(obj), "", TAB)
+		if err != nil {
+			log.Fatal(err)
+		}
+		return commit
+	case "blob":
+		blob, err := json.MarshalIndent(*ParseBlob(obj), "", TAB)
+		if err != nil {
+			log.Fatal(err)
+		}
+		return blob
+	default:
+		slog.Warn(fmt.Sprintf("Could not convert object, %v, to json", obj.Type))
+		return []byte("{}")
+	}
+}
+
 type Blob struct {
 	Content string `json:"content"`
 	Size    int    `json:"size"`
@@ -79,47 +119,8 @@ type Repo struct {
 	Checksum string
 }
 
-func newObject(objectPath string) *Object {
-	data := getBytes(objectPath, true)
-	objType, spaceIndex, err := getType(data)
-	if err != nil {
-		slog.Warn(err.Error())
-	}
-	size, contentStart, err := getSize(spaceIndex, data)
-	if err != nil {
-		slog.Warn(err.Error())
-	}
-	return &Object{objType, size, objectPath, getObjectName(objectPath), data[contentStart:]}
-}
-
-func (obj *Object) toJson() []byte {
-	switch obj.Type {
-	case "tree":
-		tree, err := json.MarshalIndent(map[string][]TreeEntry{"entries": *parseTree(obj)}, "", TAB)
-		if err != nil {
-			log.Fatal(err)
-		}
-		return tree
-	case "commit":
-		commit, err := json.MarshalIndent(parseCommit(obj), "", TAB)
-		if err != nil {
-			log.Fatal(err)
-		}
-		return commit
-	case "blob":
-		blob, err := json.MarshalIndent(parseBlob(obj), "", TAB)
-		if err != nil {
-			log.Fatal(err)
-		}
-		return blob
-	default:
-		slog.Warn(fmt.Sprintf("Could not convert object, %v, to json", obj.Type))
-		return []byte("{}")
-	}
-}
-
-func newRepo(location string) *Repo {
-	objects := getObjects(gitDir(location) + "/objects")
+func NewRepo(location string) *Repo {
+	objects := GetObjects(gitDir(location) + "/objects")
 	dirHash, err := hashdir.Make(gitDir(location), "md5")
 	if err != nil {
 		log.Fatal(err)
@@ -131,7 +132,7 @@ func newRepo(location string) *Repo {
 	}
 }
 
-func (r *Repo) changed() bool {
+func (r *Repo) Changed() bool {
 	dirHash, err := hashdir.Make(gitDir(r.Location), "md5")
 	if err != nil {
 		log.Fatal(err)
@@ -143,7 +144,49 @@ func (r *Repo) changed() bool {
 	return false
 }
 
-func (r *Repo) getObject(name string) (*Object, error) {
+func (r *Repo) GetCommits(ascending bool) []*Object {
+	var commits []*Object
+	for _, obj := range r.Objects {
+		if obj.Type == "commit" {
+			commits = append(commits, obj)
+		}
+	}
+	sort.Slice(commits, func(i, j int) bool {
+		if ascending {
+			return ParseCommit(commits[i]).CommitTime.Before(ParseCommit(commits[j]).CommitTime)
+		}
+		return ParseCommit(commits[i]).CommitTime.After(ParseCommit(commits[j]).CommitTime)
+	})
+	return commits
+}
+
+func (r *Repo) FindFirstInstanceOfBlob(name string) (*Object, *Blob, error) {
+	for _, c := range r.GetCommits(false) {
+		tree := ParseTree(r.Objects[ParseCommit(c).Tree])
+		for _, entry := range tree {
+			if entry.Hash == name {
+				return c, ParseBlob(r.Objects[name]), nil
+			}
+		}
+	}
+	return nil, nil, fmt.Errorf("could not find blob instance: %v", name)
+}
+
+// Only returns the commit if it's not an internal commit
+func (r *Repo) GetTreeCommit(name string) string {
+	obj := r.Objects[name]
+	if obj.Type == "tree" {
+		for _, o := range r.GetCommits(true) {
+			c := ParseCommit(o)
+			if c.Tree == obj.Name {
+				return o.Name
+			}
+		}
+	}
+	return ""
+}
+
+func (r *Repo) GetObject(name string) (*Object, error) {
 	obj, ok := r.Objects[name]
 	if ok {
 		return obj, nil
@@ -151,7 +194,7 @@ func (r *Repo) getObject(name string) (*Object, error) {
 	return nil, fmt.Errorf("Object, %v, doesn't seem to exist in the repo", name)
 }
 
-func (r *Repo) toJsonGraph() []byte {
+func (r *Repo) ToJsonGraph() []byte {
 
 	type Data struct {
 		Nodes []map[string]any
@@ -163,26 +206,38 @@ func (r *Repo) toJsonGraph() []byte {
 		nodes := []map[string]any{}
 		var objMap map[string]json.RawMessage
 
-		err := json.Unmarshal(obj.toJson(), &objMap)
+		err := json.Unmarshal(obj.ToJson(), &objMap)
 		if err != nil {
 			log.Fatal(err)
 		}
-		nodes = append(nodes, map[string]any{"name": obj.Name, "type": obj.Type, "object": objMap})
 		switch obj.Type {
 		case "commit":
-			commit := parseCommit(obj)
+			commit := ParseCommit(obj)
 			// commit edges to parents
 			for _, p := range commit.Parents {
 				edges = append(edges, Edge{Src: obj.Name, Dest: p})
 			}
 			// commit edge to tree
 			edges = append(edges, Edge{Src: obj.Name, Dest: commit.Tree})
+			nodes = append(nodes, map[string]any{"name": obj.Name, "type": obj.Type, "object": objMap})
 		case "tree":
-			entries := *parseTree(obj)
+			entries := ParseTree(obj)
 			// tree to blob edges
 			for _, entry := range entries {
 				edges = append(edges, Edge{Src: obj.Name, Dest: entry.Hash})
 			}
+			nodes = append(nodes, map[string]any{"name": obj.Name, "type": obj.Type, "object": objMap, "commit": r.GetTreeCommit(obj.Name)})
+		case "blob":
+			firstCommitRef := ""
+			c, _, err := r.FindFirstInstanceOfBlob(obj.Name)
+			if err != nil {
+				slog.Error(err.Error())
+			} else {
+				firstCommitRef = c.Name
+			}
+			nodes = append(nodes, map[string]any{"name": obj.Name, "type": obj.Type, "object": objMap, "firstCommitRef": firstCommitRef})
+		default:
+			nodes = append(nodes, map[string]any{"name": obj.Name, "type": obj.Type, "object": objMap})
 		}
 		return Data{Edges: edges, Nodes: nodes}
 	}
@@ -195,10 +250,12 @@ func (r *Repo) toJsonGraph() []byte {
 	}
 
 	// add refs/branches
-	head := r.head()
+	head := r.Head()
 	nodes = append(nodes, map[string]any{"name": "HEAD", "type": "ref", "object": head})
-	edges = append(edges, Edge{Src: "HEAD", Dest: filepath.Base(head.Value)})
-	for _, b := range r.branches() {
+	if r.BranchExist(filepath.Base(head.Value)) {
+		edges = append(edges, Edge{Src: "HEAD", Dest: filepath.Base(head.Value)})
+	}
+	for _, b := range r.Branches() {
 		nodes = append(nodes, map[string]any{"name": b.Name, "type": "ref", "object": b})
 		edges = append(edges, Edge{Src: b.Name, Dest: b.Commit})
 	}
@@ -237,13 +294,13 @@ func (r *Repo) toSQLite(path string) {
 	defer edgesStmt.Close()
 
 	insertObjectToTables := func(obj *Object) int {
-		_, err = objsStmt.Exec(obj.Name, obj.Type, obj.toJson())
+		_, err = objsStmt.Exec(obj.Name, obj.Type, obj.ToJson())
 		if err != nil {
 			log.Fatal(err)
 		}
 		switch obj.Type {
 		case "commit":
-			commit := parseCommit(obj)
+			commit := ParseCommit(obj)
 			// commit edges to parents
 			for _, p := range commit.Parents {
 				_, err = edgesStmt.Exec(obj.Name, p)
@@ -257,7 +314,7 @@ func (r *Repo) toSQLite(path string) {
 				log.Fatal(err)
 			}
 		case "tree":
-			entries := *parseTree(obj)
+			entries := ParseTree(obj)
 			// tree to blob edges
 			for _, entry := range entries {
 				_, err = edgesStmt.Exec(obj.Name, entry.Hash)
@@ -277,11 +334,11 @@ func (r *Repo) toSQLite(path string) {
 }
 
 func (r *Repo) refresh() {
-	objects := getObjects(r.Location)
+	objects := GetObjects(r.Location)
 	r.Objects = objects
 }
 
-func (r *Repo) head() Head {
+func (r *Repo) Head() Head {
 	bytes, err := os.ReadFile(gitDir(r.Location) + "/HEAD")
 	if err != nil {
 		log.Fatal(err)
@@ -300,30 +357,39 @@ func (r *Repo) head() Head {
 	return Head{Type: type_, Value: value}
 }
 
-func (r *Repo) currBranch() Branch {
-	head := r.head()
-	return newBranch(r.Location + fmt.Sprintf("/%s/", GIT) + head.Value)
+func (r *Repo) CurrBranch() *Branch {
+	head := r.Head()
+	return NewBranch(r.Location + fmt.Sprintf("/%s/", GIT) + head.Value)
 }
 
-func (r *Repo) currCommit() Commit {
-	branch := r.currBranch()
-	obj, err := r.getObject(branch.Commit)
+func (r *Repo) CurrCommit() *Commit {
+	branch := r.CurrBranch()
+	obj, err := r.GetObject(branch.Commit)
 	if err != nil {
 		log.Fatal(err)
 	}
-	return parseCommit(obj)
+	return ParseCommit(obj)
 }
 
-func (r *Repo) branches() []Branch {
-	branches := []Branch{}
+func (r *Repo) Branches() []*Branch {
+	var branches []*Branch
 	filepath.WalkDir(r.Location+fmt.Sprintf("/%s/refs/heads", GIT), func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			log.Fatal(err)
 		}
 		if !d.IsDir() {
-			branches = append(branches, newBranch(path))
+			branches = append(branches, NewBranch(path))
 		}
 		return nil
 	})
 	return branches
+}
+
+func (r *Repo) BranchExist(branch string) bool {
+	for _, b := range r.Branches() {
+		if b.Name == branch {
+			return true
+		}
+	}
+	return false
 }

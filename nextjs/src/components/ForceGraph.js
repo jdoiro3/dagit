@@ -25,6 +25,32 @@ function randomIntFromInterval(min, max) { // min and max included
     return Math.floor(Math.random() * (max - min + 1) + min);
 }
 
+function convertMiliseconds(miliseconds, format) {
+    var days, hours, minutes, seconds, total_hours, total_minutes, total_seconds;
+    
+    total_seconds = parseInt(Math.floor(miliseconds / 1000));
+    total_minutes = parseInt(Math.floor(total_seconds / 60));
+    total_hours = parseInt(Math.floor(total_minutes / 60));
+    days = parseInt(Math.floor(total_hours / 24));
+  
+    seconds = parseInt(total_seconds % 60);
+    minutes = parseInt(total_minutes % 60);
+    hours = parseInt(total_hours % 24);
+    
+    switch(format) {
+      case 's':
+          return total_seconds;
+      case 'm':
+          return total_minutes;
+      case 'h':
+          return total_hours;
+      case 'd':
+          return days;
+      default:
+          return { d: days, h: hours, m: minutes, s: seconds };
+    }
+};
+
 function toObj(arr, keyFunc) {
     var rv = {};
     for (var i = 0; i < arr.length; ++i)
@@ -36,10 +62,19 @@ function processGitData(data, currNodes) {
     let treeEntries = {};
     const gData = {
         nodes: data.nodes.map(obj => {
-            let value = obj.type === "blob" ? obj.object.content: obj
-            let node = { id: obj.name, type: obj.type, value: value };
+            let value = obj.type === "blob" ? obj.object.content: obj;
+            let node = { id: obj.name, type: obj.type, value: value, hidden: {} };
+            switch (obj.type) {
+                case "tree":
+                    node.hidden = { commit: obj.commit };
+                    delete node.value.commit;
+                    break
+                case "blob":
+                    node.hidden = { firstCommitRef: node.firstCommitRef };
+                    break
+            }
             if (node.id in currNodes) {
-                node = {...currNodes[node.id], ...node}
+                node = {...currNodes[node.id], ...node};
             }
             if (node.type === "tree") {
                 node.value.object.entries.forEach(e => treeEntries[e.hash] = e);
@@ -70,9 +105,9 @@ function setLinkData(gData) {
     });
 }
 
-function getCommitXAxis(gData) {
+function getCommitXAxis(gData, xMin) {
     let m = {};
-    gData.nodes.filter((node) => node.type === "commit").sort((a, b) => {
+    const commits = gData.nodes.filter((node) => node.type === "commit").sort((a, b) => {
         let aCommitTime = Date.parse(a.value.object.commitTime);
         let bCommitTime = Date.parse(b.value.object.commitTime);
         if (aCommitTime < bCommitTime) {
@@ -82,15 +117,24 @@ function getCommitXAxis(gData) {
         } else {
             return 0
         }
-    }).forEach((node, i) => {
-        m[node.value.object.commitTime] = (i*50)-1000;
-    })
+    });
+    let currX = xMin;
+    commits.forEach((c, i) => {
+        const commitTime = Date.parse(c.value.object.commitTime);
+        const prevCommitTime = i > 0 ? Date.parse(commits[i-1].value.object.commitTime) : 0;
+        const xDiff = i === 0 ? 0 : Math.min(
+            Math.max(convertMiliseconds(Math.abs(commitTime - prevCommitTime), "d"), 100),
+            1000
+        );
+        currX = currX + xDiff;
+        m[c.value.object.commitTime] = currX;
+    });
     return m;
 }
 
 const ForceGraph = () => {
-    const NODE_R = 20;
-    const xMin = -1000;
+    const minNodeR = 5;
+    const xMin = 0;
     const fgRef = useRef();
 
     const [graphData, setGraphData] = useState({ nodes: [], links: [] });
@@ -99,7 +143,7 @@ const ForceGraph = () => {
     const [show, setShow] = useState(false);
     // for link highlighting
     const [highlightLinks, setHighlightLinks] = useState(new Set());
-    const [commitDatesToX, setCommitDatesToX] = useState({})
+    const [commitDatesToX, setCommitDatesToX] = useState({});
 
     // handle messages from dagit server
     const { sendMessage, lastMessage, readyState } = useWebSocket("ws://localhost:8080/ws", {
@@ -109,8 +153,9 @@ const ForceGraph = () => {
         onMessage: (e) => {
             let data = JSON.parse(e.data);
             let {gData, treeEntries} = processGitData(data, toObj(graphData.nodes, n => n.id));
+            console.log(gData);
             setLinkData(gData);
-            setCommitDatesToX(getCommitXAxis(gData));
+            setCommitDatesToX(getCommitXAxis(gData, xMin));
             setGraphData(gData);
             setTreeEntries(treeEntries);
         },
@@ -127,10 +172,10 @@ const ForceGraph = () => {
           },
     });
 
-    const drawNode = useCallback((node, ctx, globalScale) => {
+    const drawNode = (node, ctx, globalScale) => {
         if (node.type === "ref") {
             const label = node.id;
-            const fontSize = Math.min(30, 15 / globalScale);
+            const fontSize = Math.max(minNodeR, 15 / globalScale);
             ctx.font = `${fontSize}px Sans-Serif`;
             const textWidth = ctx.measureText(label).width;
             const bckgDimensions = [textWidth, fontSize].map(n => n + fontSize * 0.2); // some padding
@@ -142,13 +187,16 @@ const ForceGraph = () => {
             ctx.textBaseline = 'middle';
             ctx.fillStyle = node.color;
             ctx.fillText(label, node.x, node.y);
+            node.radius = fontSize
         } else {
+            const r = Math.max(minNodeR, Math.min(15 / globalScale, 30));
+            node.radius = r;
             ctx.fillStyle = node.color;
             ctx.beginPath();
-            ctx.arc(node.x, node.y, Math.min(NODE_R, 15 / globalScale), 0, 2 * Math.PI, false); 
+            ctx.arc(node.x, node.y, r, 0, 2 * Math.PI, false); 
             ctx.fill();
         }
-    }, []);
+    };
 
     const handleClose = () => {
         setShow(false);
@@ -187,7 +235,10 @@ const ForceGraph = () => {
     }
 
     useEffect(() => {
-        const xMax = Math.max(...Object.values(commitDatesToX));
+        let xMax = Math.max(...Object.values(commitDatesToX));
+        if (!Number.isFinite(xMax)) {
+            xMax = 10;
+        }
         const fg = fgRef.current;
         fg.d3Force("center", null);
         fg.d3Force("y", 
@@ -199,11 +250,10 @@ const ForceGraph = () => {
                         case "commit":
                             return getRandY(node, -150, -50);
                         case "tree":
-                            const parentTree = graphData.nodes.find(n => n.type === "tree" && n.value.object.entries.find(e => e.hash === node.id));
-                            if (parentTree) {
-                                return getRandY(node, 80+300, 250+300);
-                            } else {
+                            if (node.hidden.commit) {
                                 return getRandY(node, 80, 250);
+                            } else {
+                                return getRandY(node, 80+300, 250+300);
                             }
                         default:
                             return getRandY(node, 800, 1200);
@@ -216,16 +266,25 @@ const ForceGraph = () => {
                     if (node.type === "commit") {
                         return commitDatesToX[node.value.object.commitTime];
                     } else if (node.type === "tree") {
-                        const commit = graphData.nodes.find(n => n.type === "commit" && n.value.object.tree === node.id);
-                        if (commit) {
-                            return commitDatesToX[commit.value.object.commitTime];
+                        const treeCommit = graphData.nodes.find(n => n.type === "commit" && n.id === node.hidden.commit);
+                        if (treeCommit) {
+                            return commitDatesToX[treeCommit.value.object.commitTime]
+                        } else {
+                            return getRandX(node, xMin, xMax)
+                        }
+                    } else if (node.type === "blob") {
+                        const blobCommit = graphData.nodes.find(n => n.type === "commit" && n.id === node.hidden.firstCommitRef);
+                        if (blobCommit) {
+                            return commitDatesToX[blobCommit.value.object.commitTime];
                         } else {
                             return getRandX(node, xMin, xMax);
                         }
                     } else if (node.type === "ref") {
-                        const commit = graphData.nodes.find(n => n.id === node.value.object.commit);
-                        if (commit) {
-                            return commitDatesToX[commit.value.object.commitTime];
+                        const refCommit = graphData.nodes.find(n => {
+                            return n.type === "commit" && n.id === node.value.object.commit
+                        });
+                        if (refCommit) {
+                            return commitDatesToX[refCommit.value.object.commitTime];
                         } else {
                             return getRandX(node, xMin, xMax);
                         }
@@ -235,15 +294,15 @@ const ForceGraph = () => {
                 }).strength(1)
         );
         fg.d3Force("link", d3.forceLink().strength(.001));
-        fg.d3Force("collide", d3.forceCollide(30).strength(.5));
-    }, [commitDatesToX, graphData.nodes]);
+        fg.d3Force("collide", d3.forceCollide(10));
+    }, [commitDatesToX, graphData.nodes, xMin]);
 
     return (
     <div>
         <ForceGraph2D
             ref={fgRef}
             graphData={graphData}
-            linkDirectionalArrowLength={5}
+            linkDirectionalArrowLength={10}
             linkDirectionalArrowRelPos={1}
             linkDirectionalParticles={4}
             linkDirectionalParticleWidth={link => highlightLinks.has(link) ? 8 : 0}
@@ -264,6 +323,11 @@ const ForceGraph = () => {
                 node.fy = node.y
             }}
             nodeCanvasObject={drawNode}
+            onZoomEnd={(transform) => {
+                if (fgRef.current) {
+                    fgRef.current.d3Force("collide", d3.forceCollide((node) => node.radius + 10));
+                }
+            }}
         />
         <ObjectModal 
             show={show} 

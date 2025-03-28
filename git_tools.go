@@ -17,7 +17,7 @@ import (
 )
 
 // gets the object's type (e.g., blob)
-func getType(data []byte) (string, int, error) {
+func GetType(data []byte) (string, int, error) {
 	spaceIndex, err := findFirstMatch(SPACE, 0, data)
 	if err != nil {
 		slog.Warn(err.Error())
@@ -28,7 +28,7 @@ func getType(data []byte) (string, int, error) {
 }
 
 // gets the object's size
-func getSize(spaceIndex int, data []byte) (string, int, error) {
+func GetSize(spaceIndex int, data []byte) (string, int, error) {
 	nulIndex, err := findFirstMatch(NUL, spaceIndex+1, data)
 	if err != nil {
 		slog.Warn(err.Error())
@@ -54,7 +54,7 @@ func ChangeExtension(path string, newExt string) string {
 	return path + newExt
 }
 
-func getPackedObjects(packPath string) []*Object {
+func GetPackedObjects(packPath string) []*Object {
 	packFile, err := os.Open(packPath)
 	if err != nil {
 		log.Fatal(err)
@@ -82,7 +82,7 @@ func getPackedObjects(packPath string) []*Object {
 	return objects
 }
 
-func getObjects(objDir string) map[string]*Object {
+func GetObjects(objDir string) map[string]*Object {
 	objects := make(map[string]*Object)
 	filepath.WalkDir(objDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -93,10 +93,10 @@ func getObjects(objDir string) map[string]*Object {
 			log.Fatal(err)
 		}
 		if !d.IsDir() && isHex {
-			obj := newObject(path)
+			obj := NewObject(path)
 			objects[obj.Name] = obj
 		} else if filepath.Ext(path) == ".pack" {
-			for _, obj := range getPackedObjects(path) {
+			for _, obj := range GetPackedObjects(path) {
 				objects[obj.Name] = obj
 			}
 		}
@@ -109,61 +109,61 @@ func gitDir(location string) string {
 	return location + "/" + GIT
 }
 
-func newBranch(f string) Branch {
+func NewBranch(f string) *Branch {
 	name := filepath.Base(f)
 	bytes, err := os.ReadFile(f)
 	if err != nil {
 		log.Fatal(err)
 	}
-	return Branch{Name: name, Commit: strings.Trim(string(bytes), "\n")}
+	return &Branch{Name: name, Commit: strings.Trim(string(bytes), "\n")}
 }
 
-func parseBlob(obj *Object) Blob {
+func ParseBlob(obj *Object) *Blob {
 	size, err := strconv.Atoi(obj.Size)
 	if err != nil {
 		log.Fatal(err)
 	}
-	return Blob{Content: string(obj.Content), Size: size}
+	return &Blob{Content: string(obj.Content), Size: size}
 }
 
-func parseTree(obj *Object) *[]TreeEntry {
-	var entries []TreeEntry
-	content_len := len(obj.Content)
-	entry_item, start, stop := 1, 0, 6 // TODO: don't use magic numbers. Define constants.
+func ParseTree(obj *Object) []*TreeEntry {
+	var entries []*TreeEntry
+	contentLen := len(obj.Content)
+	item, start, stop := 1, 0, 6 // TODO: don't use magic numbers. Define constants.
 	mode, name, hash := "", "", ""
-	for stop <= content_len {
-		switch entry_item {
+	for stop <= contentLen {
+		switch item {
 		// get the mode
 		case 1:
 			mode = strings.TrimSpace(string(obj.Content[start:stop]))
-			entry_item += 1
+			item += 1
 			start = stop
 		// get the name (file or dir)
 		case 2:
 			i := start
-			for obj.Content[i] != NUL && i < content_len-1 {
+			for obj.Content[i] != NUL && i < contentLen-1 {
 				i += 1
 			}
 			name = strings.TrimSpace(string(obj.Content[start:i]))
-			entry_item += 1
+			item += 1
 			start = i + 1
 			stop = start + 20 // TODO: don't use magic numbers. Define constants.
 		// get the hash (object name)
 		case 3:
 			hash = strings.TrimSpace(hex.EncodeToString(obj.Content[start:stop]))
-			entry_item = 1
+			item = 1
 			start = stop
 			stop = start + 6 // TODO: don't use magic numbers. Define constants.
-			entries = append(entries, TreeEntry{mode, name, hash})
+			entries = append(entries, &TreeEntry{mode, name, hash})
 		}
 	}
-	return &entries
+	return entries
 }
 
-func parseCommit(obj *Object) Commit {
-	tree_hash := string(obj.Content[5:45]) // TODO: don't use magic numbers. Define constants.
+func ParseCommit(obj *Object) *Commit {
+	treeHash := string(obj.Content[5:45]) // TODO: don't use magic numbers. Define constants.
 	content := string(obj.Content[46:])
-	rest_of_content := strings.Split(content, "\n")
+	restOfContent := strings.Split(content, "\n")
 	// The commit message looks to be separated by two newlines and ends with a newline
 	msg := strings.Trim(strings.Split(content, "\n\n")[1], "\n")
 
@@ -173,7 +173,7 @@ func parseCommit(obj *Object) Commit {
 	var commitTime time.Time
 	var authorTime time.Time
 
-	for _, line := range rest_of_content {
+	for _, line := range restOfContent {
 		if len(line) < 9 {
 			continue
 		}
@@ -193,5 +193,5 @@ func parseCommit(obj *Object) Commit {
 			committer = User{Name: name, Email: commiterLine[0]}
 		}
 	}
-	return Commit{tree_hash, parents, author, committer, msg, commitTime, authorTime}
+	return &Commit{treeHash, parents, author, committer, msg, commitTime, authorTime}
 }
