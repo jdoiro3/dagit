@@ -132,6 +132,28 @@ function getCommitXAxis(gData, xMin) {
     return m;
 }
 
+const getRandX = (node, min, max) => {
+    if (node.randX && node.minX === min && node.maxX === max) {
+        return node.randX;
+    } else {
+        node.randX = randomIntFromInterval(min, max);
+        node.maxX = max;
+        node.minX = min;
+        return node.randX;
+    }
+}
+
+const getRandY = (node, min, max) => {
+    if (node.randY && node.minY === min && node.maxY === max) {
+        return node.randY;
+    } else {
+        node.randY = randomIntFromInterval(min, max);
+        node.minY = min;
+        node.maxY = max;
+        return node.randY;
+    }
+}
+
 const ForceGraph = () => {
     const minNodeR = 5;
     const xMin = 0;
@@ -153,7 +175,6 @@ const ForceGraph = () => {
         onMessage: (e) => {
             let data = JSON.parse(e.data);
             let {gData, treeEntries} = processGitData(data, toObj(graphData.nodes, n => n.id));
-            console.log(gData);
             setLinkData(gData);
             setCommitDatesToX(getCommitXAxis(gData, xMin));
             setGraphData(gData);
@@ -172,7 +193,7 @@ const ForceGraph = () => {
           },
     });
 
-    const drawNode = (node, ctx, globalScale) => {
+    const drawNode = (node, ctx, globalScale, assignFillStyle) => {
         if (node.type === "ref") {
             const label = node.id;
             const fontSize = Math.max(minNodeR, 15 / globalScale);
@@ -180,7 +201,9 @@ const ForceGraph = () => {
             const textWidth = ctx.measureText(label).width;
             const bckgDimensions = [textWidth, fontSize].map(n => n + fontSize * 0.2); // some padding
 
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+            if (assignFillStyle) {
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+            }
             ctx.fillRect(node.x - bckgDimensions[0] / 2, node.y - bckgDimensions[1] / 2, ...bckgDimensions);
 
             ctx.textAlign = 'center';
@@ -191,7 +214,9 @@ const ForceGraph = () => {
         } else {
             const r = Math.max(minNodeR, Math.min(15 / globalScale, 30));
             node.radius = r;
-            ctx.fillStyle = node.color;
+            if (assignFillStyle) {
+                ctx.fillStyle = node.color;
+            }
             ctx.beginPath();
             ctx.arc(node.x, node.y, r, 0, 2 * Math.PI, false); 
             ctx.fill();
@@ -216,28 +241,10 @@ const ForceGraph = () => {
         setHighlightLinks(highlightLinks);
     };
 
-    const getRandX = (node, min, max) => {
-        if (node.randX) {
-            return node.randX;
-        } else {
-            node.randX = randomIntFromInterval(min, max);
-            return node.randX;
-        }
-    }
-
-    const getRandY = (node, min, max) => {
-        if (node.randY) {
-            return node.randY;
-        } else {
-            node.randY = randomIntFromInterval(min, max);
-            return node.randY;
-        }
-    }
-
     useEffect(() => {
         let xMax = Math.max(...Object.values(commitDatesToX));
         if (!Number.isFinite(xMax)) {
-            xMax = 10;
+            xMax = 500;
         }
         const fg = fgRef.current;
         fg.d3Force("center", null);
@@ -263,33 +270,34 @@ const ForceGraph = () => {
         fg.d3Force("x", 
             d3.forceX()
                 .x(node => {
-                    if (node.type === "commit") {
-                        return commitDatesToX[node.value.object.commitTime];
-                    } else if (node.type === "tree") {
-                        const treeCommit = graphData.nodes.find(n => n.type === "commit" && n.id === node.hidden.commit);
-                        if (treeCommit) {
-                            return commitDatesToX[treeCommit.value.object.commitTime]
-                        } else {
-                            return getRandX(node, xMin, xMax)
-                        }
-                    } else if (node.type === "blob") {
-                        const blobCommit = graphData.nodes.find(n => n.type === "commit" && n.id === node.hidden.firstCommitRef);
-                        if (blobCommit) {
-                            return commitDatesToX[blobCommit.value.object.commitTime];
-                        } else {
+                    switch (node.type) {
+                        case "commit":
+                            return commitDatesToX[node.value.object.commitTime];
+                        case "tree":
+                            const treeCommit = graphData.nodes.find(n => n.type === "commit" && n.id === node.hidden.commit);
+                            if (treeCommit) {
+                                return commitDatesToX[treeCommit.value.object.commitTime]
+                            } else {
+                                return getRandX(node, xMin, xMax);
+                            }
+                        case "blob":
+                            const blobCommit = graphData.nodes.find(n => n.type === "commit" && n.id === node.hidden.firstCommitRef);
+                            if (blobCommit) {
+                                return commitDatesToX[blobCommit.value.object.commitTime];
+                            } else {
+                                return getRandX(node, xMin, xMax);
+                            }
+                        case "ref":
+                            const refCommit = graphData.nodes.find(n => {
+                                return n.type === "commit" && n.id === node.value.object.commit
+                            });
+                            if (refCommit) {
+                                return commitDatesToX[refCommit.value.object.commitTime];
+                            } else {
+                                return getRandX(node, xMin, xMax);
+                            }
+                        default:
                             return getRandX(node, xMin, xMax);
-                        }
-                    } else if (node.type === "ref") {
-                        const refCommit = graphData.nodes.find(n => {
-                            return n.type === "commit" && n.id === node.value.object.commit
-                        });
-                        if (refCommit) {
-                            return commitDatesToX[refCommit.value.object.commitTime];
-                        } else {
-                            return getRandX(node, xMin, xMax);
-                        }
-                    } else {
-                        return getRandX(node, xMin, xMax);
                     }
                 }).strength(1)
         );
@@ -322,11 +330,15 @@ const ForceGraph = () => {
                 node.fx = node.x;
                 node.fy = node.y
             }}
-            nodeCanvasObject={drawNode}
+            nodeCanvasObject={(node, ctx, globalScale) => drawNode(node, ctx, globalScale, true)}
             onZoomEnd={(transform) => {
                 if (fgRef.current) {
                     fgRef.current.d3Force("collide", d3.forceCollide((node) => node.radius + 10));
                 }
+            }}
+            nodePointerAreaPaint={(node, color, ctx, globalScale) => {
+                ctx.fillStyle = color;
+                drawNode(node, ctx, globalScale, false);
             }}
         />
         <ObjectModal 
