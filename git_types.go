@@ -160,8 +160,8 @@ func (r *Repo) GetCommits(ascending bool) []*Object {
 	return commits
 }
 
-func (r *Repo) FindFirstInstanceOfBlob(name string) (*Object, *Blob, error) {
-	for _, c := range r.GetCommits(false) {
+func (r *Repo) FindFirstInstanceOfBlob(name string, commits []*Object) (*Object, *Blob, error) {
+	for _, c := range commits {
 		tree := ParseTree(r.Objects[ParseCommit(c).Tree])
 		for _, entry := range tree {
 			if entry.Hash == name {
@@ -173,10 +173,10 @@ func (r *Repo) FindFirstInstanceOfBlob(name string) (*Object, *Blob, error) {
 }
 
 // Only returns the commit if it's not an internal commit
-func (r *Repo) GetTreeCommit(name string) string {
+func (r *Repo) GetTreeCommit(name string, commits []*Object) string {
 	obj := r.Objects[name]
 	if obj.Type == "tree" {
-		for _, o := range r.GetCommits(true) {
+		for _, o := range commits {
 			c := ParseCommit(o)
 			if c.Tree == obj.Name {
 				return o.Name
@@ -196,12 +196,19 @@ func (r *Repo) GetObject(name string) (*Object, error) {
 
 func (r *Repo) ToJsonGraph() []byte {
 
+	type Input struct {
+		Commits []*Object
+		Obj     *Object
+	}
+
 	type Data struct {
 		Nodes []map[string]any
 		Edges []Edge
 	}
 
-	getNodesAndEdges := func(obj *Object) Data {
+	getNodesAndEdges := func(input *Input) Data {
+		obj := input.Obj
+		commits := input.Commits
 		edges := []Edge{}
 		nodes := []map[string]any{}
 		var objMap map[string]json.RawMessage
@@ -226,10 +233,10 @@ func (r *Repo) ToJsonGraph() []byte {
 			for _, entry := range entries {
 				edges = append(edges, Edge{Src: obj.Name, Dest: entry.Hash})
 			}
-			nodes = append(nodes, map[string]any{"name": obj.Name, "type": obj.Type, "object": objMap, "commit": r.GetTreeCommit(obj.Name)})
+			nodes = append(nodes, map[string]any{"name": obj.Name, "type": obj.Type, "object": objMap, "commit": r.GetTreeCommit(obj.Name, commits)})
 		case "blob":
 			firstCommitRef := ""
-			c, _, err := r.FindFirstInstanceOfBlob(obj.Name)
+			c, _, err := r.FindFirstInstanceOfBlob(obj.Name, commits)
 			if err != nil {
 				slog.Error(err.Error())
 			} else {
@@ -244,7 +251,13 @@ func (r *Repo) ToJsonGraph() []byte {
 
 	edges := []Edge{}
 	nodes := []map[string]any{}
-	for d := range parallelWork(slices.Collect(maps.Values(r.Objects)), getNodesAndEdges) {
+
+	commits := r.GetCommits(true)
+	var inputs []*Input
+	for _, obj := range r.Objects {
+		inputs = append(inputs, &Input{Commits: commits, Obj: obj})
+	}
+	for d := range parallelWork(inputs, getNodesAndEdges) {
 		edges = append(edges, d.Edges...)
 		nodes = append(nodes, d.Nodes...)
 	}
@@ -252,7 +265,10 @@ func (r *Repo) ToJsonGraph() []byte {
 	// add refs/branches
 	head := r.Head()
 	nodes = append(nodes, map[string]any{"name": "HEAD", "type": "ref", "object": head})
-	if r.BranchExist(filepath.Base(head.Value)) {
+	headObj, err := r.GetObject(head.Value)
+	if err == nil {
+		edges = append(edges, Edge{Src: "HEAD", Dest: headObj.Name})
+	} else if r.BranchExist(filepath.Base(head.Value)) {
 		edges = append(edges, Edge{Src: "HEAD", Dest: filepath.Base(head.Value)})
 	}
 	for _, b := range r.Branches() {
