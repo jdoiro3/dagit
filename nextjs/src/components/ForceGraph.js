@@ -62,7 +62,7 @@ const processGitData = (data, currNodes) => {
     let treeEntries = {};
     const gData = {
         nodes: data.nodes.map(obj => {
-            let value = obj.type === "blob" ? obj.object.content: obj;
+            let value = obj.type === "blob" ? obj.object.content: obj.object;
             let node = { id: obj.name, type: obj.type, value: value, hidden: {} };
             switch (obj.type) {
                 case "tree":
@@ -77,7 +77,7 @@ const processGitData = (data, currNodes) => {
                 node = {...currNodes[node.id], ...node};
             }
             if (node.type === "tree") {
-                node.value.object.entries.forEach(e => treeEntries[e.hash] = e);
+                node.value.entries.forEach(e => treeEntries[e.hash] = e);
             }
             return node;
         }),
@@ -121,8 +121,8 @@ const setLinkData = (gData) => {
 const getCommitXAxis = (gData, xMin) => {
     let m = {};
     const commits = gData.nodes.filter((node) => node.type === "commit").sort((a, b) => {
-        let aCommitTime = Date.parse(a.value.object.commitTime);
-        let bCommitTime = Date.parse(b.value.object.commitTime);
+        let aCommitTime = Date.parse(a.value.commitTime);
+        let bCommitTime = Date.parse(b.value.commitTime);
         if (aCommitTime < bCommitTime) {
             return -1
         } else if (aCommitTime > bCommitTime) {
@@ -133,14 +133,14 @@ const getCommitXAxis = (gData, xMin) => {
     });
     let currX = xMin;
     commits.forEach((c, i) => {
-        const commitTime = Date.parse(c.value.object.commitTime);
-        const prevCommitTime = i > 0 ? Date.parse(commits[i-1].value.object.commitTime) : 0;
+        const commitTime = Date.parse(c.value.commitTime);
+        const prevCommitTime = i > 0 ? Date.parse(commits[i-1].value.commitTime) : 0;
         const xDiff = i === 0 ? 0 : Math.min(
             Math.max(convertMiliseconds(Math.abs(commitTime - prevCommitTime), "d"), 100),
             1000
         );
         currX = currX + xDiff;
-        m[c.value.object.commitTime] = currX;
+        m[c.value.commitTime] = currX;
     });
     return m;
 }
@@ -301,27 +301,27 @@ const ForceGraph = () => {
                 .x(node => {
                     switch (node.type) {
                         case "commit":
-                            return commitDatesToX[node.value.object.commitTime];
+                            return commitDatesToX[node.value.commitTime];
                         case "tree":
                             const treeCommit = graphData.nodes.find(n => n.type === "commit" && n.id === node.hidden.commit);
                             if (treeCommit) {
-                                return commitDatesToX[treeCommit.value.object.commitTime]
+                                return commitDatesToX[treeCommit.value.commitTime]
                             } else {
                                 return getRandX(node, xMin, xMax);
                             }
                         case "blob":
                             const blobCommit = graphData.nodes.find(n => n.type === "commit" && n.id === node.hidden.firstCommitRef);
                             if (blobCommit) {
-                                return commitDatesToX[blobCommit.value.object.commitTime];
+                                return commitDatesToX[blobCommit.value.commitTime];
                             } else {
                                 return getRandX(node, xMin, xMax);
                             }
                         case "ref":
                             const refCommit = graphData.nodes.find(n => {
-                                return n.type === "commit" && n.id === node.value.object.commit
+                                return n.type === "commit" && n.id === node.value.commit
                             });
                             if (refCommit) {
-                                return commitDatesToX[refCommit.value.object.commitTime];
+                                return commitDatesToX[refCommit.value.commitTime];
                             } else {
                                 return getRandX(node, xMin, xMax);
                             }
