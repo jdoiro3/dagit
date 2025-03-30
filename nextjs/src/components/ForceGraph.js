@@ -9,7 +9,7 @@ import useWebSocket, { ReadyState } from 'react-use-websocket';
 import SyntaxHighlighter from 'react-syntax-highlighter';
 import { docco } from 'react-syntax-highlighter/dist/esm/styles/hljs';
 
-function extToLanguage(fileName) {
+const extToLanguage = (fileName) => {
     const ext = fileName.slice(fileName.lastIndexOf("."));
     const extToLang = {
         ".js": "javascript",
@@ -21,11 +21,11 @@ function extToLanguage(fileName) {
     return ext in extToLang ? extToLang[ext] : "text";
 }
 
-function randomIntFromInterval(min, max) { // min and max included 
+const randomIntFromInterval = (min, max) => {
     return Math.floor(Math.random() * (max - min + 1) + min);
 }
 
-function convertMiliseconds(miliseconds, format) {
+const convertMiliseconds = (miliseconds, format) => {
     var days, hours, minutes, seconds, total_hours, total_minutes, total_seconds;
     
     total_seconds = parseInt(Math.floor(miliseconds / 1000));
@@ -49,16 +49,16 @@ function convertMiliseconds(miliseconds, format) {
       default:
           return { d: days, h: hours, m: minutes, s: seconds };
     }
-};
+}
 
-function toObj(arr, keyFunc) {
+const toObj = (arr, keyFunc) => {
     var rv = {};
     for (var i = 0; i < arr.length; ++i)
       rv[keyFunc(arr[i])] = arr[i];
     return rv;
-  }
+}
 
-function processGitData(data, currNodes) {
+const processGitData = (data, currNodes) => {
     let treeEntries = {};
     const gData = {
         nodes: data.nodes.map(obj => {
@@ -86,7 +86,7 @@ function processGitData(data, currNodes) {
     return {gData: gData, treeEntries: treeEntries};
 }
 
-function setLinkData(gData) {
+const setLinkData = (gData) => {
     gData.links.forEach(link => {
         const a = gData.nodes.find(obj => {
             return obj.id === link.source;
@@ -94,18 +94,31 @@ function setLinkData(gData) {
         const b = gData.nodes.find(obj => {
             return obj.id === link.target;
         });
+        !a.neighbors && (a.neighbors = []);
+        !b.neighbors && (b.neighbors = []);
+        a.neighbors.push(b);
+        b.neighbors.push(a);
+
         if (a) {
             !a.links && (a.links = []);
             a.links.push(link);
+            !a.neighbors && (a.neighbors = []);
+            if (b) {
+                a.neighbors.push(b);
+            }
         }
         if (b) {
             !b.links && (b.links = []);
             b.links.push(link);
+            !b.neighbors && (b.neighbors = []);
+            if (a) {
+                b.neighbors.push(a);
+            }
         }
-    });
+    })
 }
 
-function getCommitXAxis(gData, xMin) {
+const getCommitXAxis = (gData, xMin) => {
     let m = {};
     const commits = gData.nodes.filter((node) => node.type === "commit").sort((a, b) => {
         let aCommitTime = Date.parse(a.value.object.commitTime);
@@ -163,8 +176,11 @@ const ForceGraph = () => {
     const [treeEntries, setTreeEntries] = useState({})
     const [modalNode, setModalNode] = useState({});
     const [show, setShow] = useState(false);
-    // for link highlighting
+    // for node and link highlighting
+    const [highlightNodes, setHighlightNodes] = useState(new Set());
     const [highlightLinks, setHighlightLinks] = useState(new Set());
+    const [hoverNode, setHoverNode] = useState(null);
+    // used for setting the node's x axis position
     const [commitDatesToX, setCommitDatesToX] = useState({});
 
     // handle messages from dagit server
@@ -200,12 +216,12 @@ const ForceGraph = () => {
             ctx.font = `${fontSize}px Sans-Serif`;
             const textWidth = ctx.measureText(label).width;
             const bckgDimensions = [textWidth, fontSize].map(n => n + fontSize * 0.2); // some padding
-
+    
             if (assignFillStyle) {
                 ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
             }
             ctx.fillRect(node.x - bckgDimensions[0] / 2, node.y - bckgDimensions[1] / 2, ...bckgDimensions);
-
+    
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillStyle = node.color;
@@ -215,13 +231,17 @@ const ForceGraph = () => {
             const r = Math.max(minNodeR, Math.min(15 / globalScale, 30));
             node.radius = r;
             if (assignFillStyle) {
-                ctx.fillStyle = node.color;
+                if (hoverNode === null) {
+                    ctx.fillStyle = node.color;
+                } else {
+                    ctx.fillStyle = highlightNodes.has(node) || node === hoverNode ? "orange" : node.color;
+                }
             }
             ctx.beginPath();
             ctx.arc(node.x, node.y, r, 0, 2 * Math.PI, false); 
             ctx.fill();
         }
-    };
+    }
 
     const handleClose = () => {
         setShow(false);
@@ -233,12 +253,21 @@ const ForceGraph = () => {
         setShow(true);
     };
 
+    const updateHighlight = () => {
+        setHighlightNodes(highlightNodes);
+        setHighlightLinks(highlightLinks);
+    };
+
     const handleNodeHover = node => {
+        highlightNodes.clear();
         highlightLinks.clear();
         if (node && node.links) {
+            highlightNodes.add(node);
+            node.neighbors.forEach(neighbor => highlightNodes.add(neighbor));
             node.links.forEach(link => highlightLinks.add(link));
         }
-        setHighlightLinks(highlightLinks);
+        setHoverNode(node || null);
+        updateHighlight();
     };
 
     useEffect(() => {
@@ -255,7 +284,7 @@ const ForceGraph = () => {
                         case "ref":
                             return getRandY(node, -600, -500);
                         case "commit":
-                            return getRandY(node, -150, -50);
+                            return getRandY(node, -350, -50);
                         case "tree":
                             if (node.hidden.commit) {
                                 return getRandY(node, 80, 250);
