@@ -10,6 +10,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -20,9 +21,10 @@ import (
 )
 
 const (
-	SPACE byte   = 32
-	NUL   byte   = 0
-	GIT   string = ".git"
+	space byte   = 32
+	nul   byte   = 0
+	git   string = ".git"
+	tab   string = "    "
 )
 
 type Edge struct {
@@ -64,19 +66,19 @@ func NewObject(objectPath string) *Object {
 func (obj *Object) ToJson() []byte {
 	switch obj.Type {
 	case "tree":
-		tree, err := json.MarshalIndent(map[string][]*TreeEntry{"entries": ParseTree(obj)}, "", TAB)
+		tree, err := json.MarshalIndent(map[string][]*TreeEntry{"entries": ParseTree(obj)}, "", tab)
 		if err != nil {
 			log.Fatal(err)
 		}
 		return tree
 	case "commit":
-		commit, err := json.MarshalIndent(*ParseCommit(obj), "", TAB)
+		commit, err := json.MarshalIndent(*ParseCommit(obj), "", tab)
 		if err != nil {
 			log.Fatal(err)
 		}
 		return commit
 	case "blob":
-		blob, err := json.MarshalIndent(*ParseBlob(obj), "", TAB)
+		blob, err := json.MarshalIndent(*ParseBlob(obj), "", tab)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -257,7 +259,7 @@ func (r *Repo) ToJsonGraph() []byte {
 	for _, obj := range r.Objects {
 		inputs = append(inputs, &Input{Commits: commits, Obj: obj})
 	}
-	for d := range parallelWork(inputs, getNodesAndEdges) {
+	for d := range ParallelWork(inputs, getNodesAndEdges, runtime.NumCPU()) {
 		edges = append(edges, d.Edges...)
 		nodes = append(nodes, d.Nodes...)
 	}
@@ -276,7 +278,7 @@ func (r *Repo) ToJsonGraph() []byte {
 		edges = append(edges, Edge{Src: b.Name, Dest: b.Commit})
 	}
 
-	repoGraph, err := json.MarshalIndent(map[string]any{"nodes": nodes, "edges": edges}, "", TAB)
+	repoGraph, err := json.MarshalIndent(map[string]any{"nodes": nodes, "edges": edges}, "", tab)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -292,8 +294,8 @@ func (r *Repo) toSQLite(path string) {
 		log.Fatal(err)
 	}
 	defer db.Close()
-	execSql(db, `CREATE TABLE objects (name text primary key, type text, object jsonb);`)
-	execSql(db, `CREATE TABLE edges (src text, dest text);`)
+	execSql(db, `CREATE tabLE objects (name text primary key, type text, object jsonb);`)
+	execSql(db, `CREATE tabLE edges (src text, dest text);`)
 	// these two commands allow for concurrent writes without encountering "database is locked" errors.
 	execSql(db, "PRAGMA journal_mode = WAL;")
 	execSql(db, "PRAGMA synchronous = normal;")
@@ -309,7 +311,7 @@ func (r *Repo) toSQLite(path string) {
 	defer objsStmt.Close()
 	defer edgesStmt.Close()
 
-	insertObjectToTables := func(obj *Object) int {
+	insertObjectTotables := func(obj *Object) int {
 		_, err = objsStmt.Exec(obj.Name, obj.Type, obj.ToJson())
 		if err != nil {
 			log.Fatal(err)
@@ -344,7 +346,7 @@ func (r *Repo) toSQLite(path string) {
 	}
 
 	bar := progressbar.Default(int64(len(r.Objects)))
-	for n := range parallelWork(slices.Collect(maps.Values(r.Objects)), insertObjectToTables) {
+	for n := range ParallelWork(slices.Collect(maps.Values(r.Objects)), insertObjectTotables, runtime.NumCPU()) {
 		bar.Add(n)
 	}
 }
@@ -375,7 +377,7 @@ func (r *Repo) Head() Head {
 
 func (r *Repo) CurrBranch() *Branch {
 	head := r.Head()
-	return NewBranch(r.Location + fmt.Sprintf("/%s/", GIT) + head.Value)
+	return NewBranch(r.Location + fmt.Sprintf("/%s/", git) + head.Value)
 }
 
 func (r *Repo) CurrCommit() *Commit {
@@ -389,7 +391,7 @@ func (r *Repo) CurrCommit() *Commit {
 
 func (r *Repo) Branches() []*Branch {
 	var branches []*Branch
-	filepath.WalkDir(r.Location+fmt.Sprintf("/%s/refs/heads", GIT), func(path string, d fs.DirEntry, err error) error {
+	filepath.WalkDir(r.Location+fmt.Sprintf("/%s/refs/heads", git), func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			log.Fatal(err)
 		}

@@ -13,22 +13,35 @@ import (
 	"time"
 )
 
-const TAB string = "    "
-
-func parallelWork[T any, R any](data []T, worker func(T) R) <-chan R {
+func ParallelWork[T any, R any](data []T, task func(T) R, workers int) <-chan R {
 	results := make(chan R)
+	tasks := make(chan T, len(data))
 	var wg sync.WaitGroup
-	for _, i := range data {
-		wg.Add(1)
-		go func(i T) {
-			defer wg.Done()
-			results <- worker(i)
-		}(i)
+
+	worker := func(id int, tasks <-chan T, results chan<- R) {
+		for t := range tasks {
+			results <- task(t)
+		}
 	}
-	go func(wg *sync.WaitGroup, results chan R) {
+
+	for i := range workers {
+		wg.Add(1)
+		go func(id int, tasks <-chan T, results chan<- R) {
+			defer wg.Done()
+			worker(i, tasks, results)
+		}(i, tasks, results)
+	}
+
+	for _, d := range data {
+		tasks <- d
+	}
+	close(tasks)
+
+	go func(results chan R) {
 		wg.Wait()
 		close(results)
-	}(&wg, results)
+	}(results)
+
 	return results
 }
 

@@ -18,7 +18,7 @@ import (
 
 // gets the object's type (e.g., blob)
 func GetType(data []byte) (string, int, error) {
-	spaceIndex, err := findFirstMatch(SPACE, 0, data)
+	spaceIndex, err := findFirstMatch(space, 0, data)
 	if err != nil {
 		slog.Warn(err.Error())
 		return "", -1, fmt.Errorf("could not get type given byte sequence: % x", data)
@@ -29,7 +29,7 @@ func GetType(data []byte) (string, int, error) {
 
 // gets the object's size
 func GetSize(spaceIndex int, data []byte) (string, int, error) {
-	nulIndex, err := findFirstMatch(NUL, spaceIndex+1, data)
+	nulIndex, err := findFirstMatch(nul, spaceIndex+1, data)
 	if err != nil {
 		slog.Warn(err.Error())
 		return "", -1, fmt.Errorf("could not get size given byte sequence: % x", data)
@@ -106,7 +106,7 @@ func GetObjects(objDir string) map[string]*Object {
 }
 
 func gitDir(location string) string {
-	return location + "/" + GIT
+	return location + "/" + git
 }
 
 func NewBranch(f string) *Branch {
@@ -141,7 +141,7 @@ func ParseTree(obj *Object) []*TreeEntry {
 		// get the name (file or dir)
 		case 2:
 			i := start
-			for obj.Content[i] != NUL && i < contentLen-1 {
+			for obj.Content[i] != nul && i < contentLen-1 {
 				i += 1
 			}
 			name = strings.TrimSpace(string(obj.Content[start:i]))
