@@ -1,4 +1,4 @@
-# DagGit
+# DaGit
 *Work in progress.*
 
 Git's docs on its [Internals](https://git-scm.com/book/en/v2/Git-Internals-Git-Objects)
